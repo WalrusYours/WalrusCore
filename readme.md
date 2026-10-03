@@ -1,10 +1,16 @@
-## W.A.L.R.U.S
-
-> Weight And Liberty-based Recommendation Utility System
-
 <div align="center">
-    <img src="docs/walrus.png" width=150>
+
+<img src="docs/walrus.png" width=150>
+    
+# W.A.L.R.U.S
+
+***W*eight *A*nd *L*iberty-based *R*ecommendation *U*tility *S*ystem**
+
+[Website](https://walrusyours.github.io) • [Docs](https://walrusyours.github.io/docs) • [Instalation Guide](https://walrusyours.github.io/install)
+
 </div>
+
+
 
 WALRUS is a recommendation engine you adapt to your platform with a YAML schema. You
 describe your data and how a good result is scored; end users get a few knobs to re-weight
