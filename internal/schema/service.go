@@ -1,7 +1,9 @@
 package schema
 
 import (
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,15 +31,18 @@ type Result struct {
 	Message      string     `json:"message"`
 }
 
-// Service holds the schema versions. In-memory for now; the store interface replaces the
-// slice when persistence arrives.
+// Service keeps the versions in memory and the active one compiled.
 type Service struct {
 	mu       sync.RWMutex
 	versions []Version
+	cur      atomic.Pointer[Compiled]
 	now      func() time.Time
 }
 
 func NewService() *Service { return &Service{now: time.Now} }
+
+// Compiled returns the active schema, read when needed (nil before the first push).
+func (s *Service) Compiled() *Compiled { return s.cur.Load() }
 
 func (s *Service) Current() (Version, bool) {
 	s.mu.RLock()
@@ -74,7 +79,7 @@ func (s *Service) Load(yamlText []byte, o LoadOptions) Result {
 	var cur Version
 	if n := len(s.versions); n > 0 {
 		cur = s.versions[n-1]
-		current, _ = Parse([]byte(cur.YAML))
+		current = s.cur.Load().Schema
 	}
 	diff := Diff(current, parsed)
 
@@ -102,7 +107,12 @@ func (s *Service) Load(yamlText []byte, o LoadOptions) Result {
 		Verdict: diff.Verdict,
 		YAML:    string(yamlText),
 	}
+	compiled, err := Compile(parsed, v.Version, v.Hash)
+	if err != nil {
+		return Result{Errors: []Issue{{Message: err.Error()}}, Diff: diff, Message: fmt.Sprintf("could not compile the schema: %v", err)}
+	}
 	s.versions = append(s.versions, v)
+	s.cur.Store(compiled)
 	return Result{OK: true, Errors: []Issue{}, Diff: diff, Version: v.Version, Message: "applied as version " + itoa(v.Version)}
 }
 
