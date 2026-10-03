@@ -154,7 +154,7 @@ comebacks), `same_age` with what items of the same age normally get (it judges n
 fairly), and `auto` uses `own` once an item has enough history and `same_age` before.
 Required: `window`; `baseline` unless `against: same_age`; `on` unless `against: own`.
 Defaults: `against: auto`, `count: people`, `min: 1`, `ratio: 2`, and every positive-weight
-interaction for `of`. Unknown keys are rejected. Details and the formula: ALGORITHMS.md 6.1.
+interaction for `of`. Unknown keys are rejected. A trend scores `max(0, ln(pace / ratio))`, where `pace` is (recent + 1) / (ordinary + 1), once the recent engagement reaches `min`.
 
 ### `knobs`
 
@@ -238,8 +238,7 @@ Nine complete `schema.yml` files, one per kind of platform. Copy the closest one
 entities and attributes to match your data, and push it. Each file is checked by the
 server's test suite, so they stay valid as the schema language evolves. The first six use
 only the v1 sections; `shop.yml`, `shelf.yml` and the playlist part of `spotify.yml` use the
-schema v2 sections (recommenders, context, rules, metrics, experiments, feedback, recurrence),
-whose full reference is `.claude/SCHEMA-V2.md` in the thesis workspace.
+schema v2 sections (recommenders, context, rules, metrics, experiments, feedback, recurrence).
 
 | Example | Platform | What it shows |
 |---------|----------|---------------|

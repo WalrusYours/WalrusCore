@@ -1,4 +1,4 @@
-# Books and films in one profile, schema v2 (.claude/SCHEMA-V2.md). What it shows:
+# Books and films in one profile, schema v2. What it shows:
 #   - two recommendable types; taste learned across them (`from`), and a content bridge
 #     through a shared vocabulary of genres (`similarity.cross`);
 #   - one home list mixing both types at fixed shares;

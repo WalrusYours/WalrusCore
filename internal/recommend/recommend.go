@@ -9,7 +9,7 @@ import (
 	"github.com/timurcravtov/walrus/internal/similarity"
 )
 
-// SeedLimit is how many profile items seed candidate generation (ALGORITHMS.md 5).
+// SeedLimit is how many profile items seed candidate generation.
 const SeedLimit = 50
 
 // Content is the signal id used in explain output.
@@ -33,7 +33,7 @@ type Result struct {
 // would, once more signals exist.
 //
 // content(i) = Σ_j P[j]·sim(i,j) / Σ_j |P[j]|, over profile items j that list i as a neighbour
-// (ALGORITHMS.md 6). Negative profile entries pull the score down but never seed candidates.
+// Negative profile entries pull the score down but never seed candidates.
 func Recommend(in Input) []Result {
 	type acc struct {
 		num, den float64

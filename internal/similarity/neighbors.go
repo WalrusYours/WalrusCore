@@ -8,8 +8,8 @@ type ItemNeighbor struct {
 	Sim  float64
 }
 
-// ItemNeighbors precomputes the top-k Jaccard neighbours of every item on one set attribute
-// (ALGORITHMS.md 3.3). Items sharing nothing with an item are not its neighbours. The result
+// ItemNeighbors precomputes the top-k Jaccard neighbours of every item on one set attribute.
+// Items sharing nothing with an item are not its neighbours. The result
 // does not depend on any weight, so it can be built once and reused across knob changes.
 func ItemNeighbors(items []domain.Entity, attr string, k int) map[domain.EntityID][]ItemNeighbor {
 	sets := make([]domain.Value, len(items))

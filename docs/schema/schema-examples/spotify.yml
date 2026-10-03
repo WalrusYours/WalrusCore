@@ -1,5 +1,5 @@
 # Music streaming. Adapted from ideas/examples/spotify.schema.yml; presets now set knobs only.
-# Schema v2 parts (.claude/SCHEMA-V2.md): a home feed that is exactly the v1 behaviour, and
+# Schema v2 parts: a home feed that is exactly the v1 behaviour, and
 # "you might also add" for a playlist (seed: items), which learns from what other people put
 # in the same playlists.
 version: 1

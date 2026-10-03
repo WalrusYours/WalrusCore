@@ -21,6 +21,9 @@ type Input struct {
 	Preset    string
 	Saved     map[string]float64
 	Overrides map[string]float64
+	// Scope, when not nil, lists the knobs that apply: a knob outside it keeps its value but its
+	// bindings are skipped, so a feed knob cannot change a playlist's weights. nil applies all.
+	Scope []string
 }
 
 // Resolved: slices aligned with Signals, MetaNames and Knobs.
@@ -83,6 +86,9 @@ func ResolveInto(c *schema.Compiled, in Input, dst *Resolved) error {
 			dst.Clamped = append(dst.Clamped, k.ID)
 			x = math.Min(math.Max(x, k.Min), k.Max)
 			dst.Knobs[i] = x
+		}
+		if in.Scope != nil && !slices.Contains(in.Scope, k.ID) {
+			continue
 		}
 		for _, b := range k.Bindings {
 			v := b.Fn(x)

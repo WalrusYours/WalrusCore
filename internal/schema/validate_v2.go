@@ -9,7 +9,7 @@ import (
 	"github.com/timurcravtov/walrus/internal/schema/expr"
 )
 
-// Validation of the schema v2 sections (.claude/SCHEMA-V2.md, Appendix A).
+// Validation of the schema v2 sections.
 
 func (v *validator) defaultLocale() string {
 	if m := v.s.Meta; m != nil && m.DefaultLocale != "" {
@@ -255,7 +255,7 @@ func (v *validator) rules() {
 	}
 }
 
-// knobTarget checks a knob map target against the T3 vocabulary (SCHEMA-V2.md 4.9).
+// knobTarget checks a knob map target against the T3 vocabulary.
 func (v *validator) knobTarget(p, target string) {
 	if _, ok := v.s.Signals[target]; ok || slices.Contains(MetaTargets, target) {
 		return

@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Types for the schema v2 sections (.claude/SCHEMA-V2.md, Appendix A).
+// Types for the schema v2 sections.
 
 type Meta struct {
 	Name          string   `yaml:"name,omitempty"`
@@ -196,7 +196,7 @@ type Audience struct {
 	When string `yaml:"when"`
 }
 
-// Variant is a schema patch: paths (SCHEMA-V2.md Appendix B) to values.
+// Variant is a schema patch: paths to values.
 type Variant struct {
 	Share float64        `yaml:"share"`
 	Set   map[string]any `yaml:"set,omitempty"`
@@ -247,7 +247,7 @@ type Split struct {
 	HoldoutLast Duration `yaml:"holdout_last,omitempty"`
 }
 
-// OfflineMetrics are the ALGORITHMS.md 13 metric names.
+// OfflineMetrics are the offline evaluation metric names.
 var OfflineMetrics = []string{"precision", "recall", "ndcg", "ild", "coverage", "novelty", "gini"}
 
 type Privacy struct {

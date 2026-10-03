@@ -276,3 +276,31 @@ func TestKnobDefaultsAndV2Targets(t *testing.T) {
 		t.Errorf("trending = %v, want 0.4", got)
 	}
 }
+
+// A recommender lists the knobs it offers; the others must not move its weights.
+func TestScopeSkipsKnobsOutsideIt(t *testing.T) {
+	c := compile(t, "feed.yml")
+	all, _ := Resolve(c, Input{Overrides: map[string]float64{"explore": 1}})
+	if got := weight(t, c, all, "exploration"); !near(got, 1) {
+		t.Fatalf("without a scope exploration = %v, want 1", got)
+	}
+	// explore is outside the scope: its binding is skipped, exploration keeps the schema default
+	scoped, err := Resolve(c, Input{Overrides: map[string]float64{"explore": 1}, Scope: []string{"taste_vs_crowd"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := weight(t, c, scoped, "exploration"); !near(got, 0.1) {
+		t.Errorf("out of scope exploration = %v, want the default 0.1", got)
+	}
+	if got := scoped.Knobs[c.KnobIndex["explore"]]; got != 1 {
+		t.Errorf("the knob's own value must still resolve, got %v", got)
+	}
+	if got := weight(t, c, scoped, "content"); !near(got, 0.5) {
+		t.Errorf("in-scope knob still applies: content = %v, want 0.5", got)
+	}
+	// an empty, non-nil scope means no knob applies at all
+	none, _ := Resolve(c, Input{Scope: []string{}})
+	if got := weight(t, c, none, "collaborative"); !near(got, 0.5) {
+		t.Errorf("empty scope: collaborative = %v, want the default 0.5", got)
+	}
+}

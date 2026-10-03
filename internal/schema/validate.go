@@ -27,10 +27,10 @@ var SignalTypes = []string{
 	"context_match", "provided", "formula", "satiation", "recurrence",
 }
 
-// trendKeys are the parameters of a `trend` signal (ALGORITHMS.md 6.1).
+// trendKeys are the parameters of a `trend` signal.
 var trendKeys = []string{"window", "baseline", "against", "on", "of", "count", "min", "ratio"}
 
-// signalKeys are the type-specific keys each signal type accepts (SCHEMA-V2.md 4.6). The keys
+// signalKeys are the type-specific keys each signal type accepts. The keys
 // every type accepts (default, for, from, normalise...) are SignalSpec fields.
 var signalKeys = map[string][]string{
 	"item_neighbors":     {"terms"},

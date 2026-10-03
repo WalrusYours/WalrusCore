@@ -1,6 +1,5 @@
 # "You might also add": recommend songs for a playlist. The smallest schema that does it, in the
 # order you would write it. (spotify.yml has the same recommender inside a bigger schema.)
-# Reference for every key: .claude/SCHEMA-V2.md.
 version: 1
 
 # 1. WHAT EXISTS. A user, and the thing being recommended. Give a song the attributes you can

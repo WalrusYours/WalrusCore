@@ -9,8 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Tier says what changing a schema path costs, and so who may change it (SCHEMA-V2.md 1,
-// Appendix B).
+// Tier says what changing a schema path costs, and so who may change it.
 type Tier string
 
 const (

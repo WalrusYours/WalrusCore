@@ -6,7 +6,7 @@ import (
 )
 
 // v2Case edits one example so exactly one rule is broken, and expects an issue at path whose
-// message contains the given text. Every rule of SCHEMA-V2.md Appendix A has a case here.
+// message contains the given text. Every validation rule of the v2 sections has a case here.
 type v2Case struct {
 	name, old, new, path, contains string
 }
@@ -102,7 +102,7 @@ func TestV2ShopRules(t *testing.T) {
 		{"toggle with a range", "kind: toggle\n    group:", "kind: toggle\n    range: [0, 2]\n    group:", "knobs[2].range", "toggle is 0 or 1"},
 		{"choice with one option", "      - { value: 0.5, label: { en: Some,  ro: Puține,  ru: Немного } }\n      - { value: 1,   label: { en: Plenty, ro: Multe,  ru: Много } }\n", "", "knobs[3].options", "at least two"},
 		{"choice default not an option", "    default: 0.5\n    maps: { trending: \"0.4 * x\" }", "    default: 0.25\n    maps: { trending: \"0.4 * x\" }", "knobs[3].default", "option values"},
-		{"preset value not an option", "default:  { taste_vs_crowd: 0.5, trend_strength: 0.5 }", "default:  { taste_vs_crowd: 0.5, trend_strength: 0.3 }", "presets.default.trend_strength", "option values"},
+		{"preset value not an option", "discover: { taste_vs_crowd: 0.8, trend_strength: 1,", "discover: { taste_vs_crowd: 0.8, trend_strength: 0.3,", "presets.discover.trend_strength", "option values"},
 		{"default outside the range", "    range: [0, 1]\n    default: 0.5\n    maps: { content:", "    range: [0, 1]\n    default: 2\n    maps: { content:", "knobs[0].default", "outside"},
 		{"scope names nothing", "scope: [home, related]", "scope: [home, homepage]", "knobs[4].scope", "not a declared recommender"},
 		{"depends on itself", "    scope: [home]\n    maps: { recommenders.home.diversity: \"x\" }", "    scope: [home]\n    depends_on: diversity\n    maps: { recommenders.home.diversity: \"x\" }", "knobs[6].depends_on", "another declared knob"},
@@ -146,7 +146,7 @@ func TestV2ShopRules(t *testing.T) {
 		{"variant changes stored data", "          rules.seller_cap.quota.max: 3", "          rules.seller_cap.quota.max: 3\n          entities.listing.key: uid", "experiments.trend_weight.variants.more_trend.set", "T0"},
 		{"variant changes metrics", "          rules.seller_cap.quota.max: 3", "          rules.seller_cap.quota.max: 3\n          metrics.ctr.ratio: [view, impression]", "experiments.trend_weight.variants.more_trend.set", "cannot change this section"},
 		{"variant removes a constraint", "          rules.seller_cap.quota.max: 3", "          rules.seller_cap.quota.max: 3\n          constraints.not_hidden: null", "experiments.trend_weight.variants.more_trend.set", "never remove"},
-		{"variant breaks the schema", "recommenders.home.weights.trending: 0.4", "recommenders.home.weights.nope: 0.4", "experiments.trend_weight.variants.more_trend.set", "after applying the variant, recommenders.home.weights.nope"},
+		{"variant breaks the schema", "knobs.trend_strength.default: 1", "knobs.trend_strength.default: 5", "experiments.trend_weight.variants.more_trend.set", "after applying the variant, knobs[3].default"},
 		{"layer over full", "status: draft\n    layer: interface\n    traffic: 0.2", "status: running\n    layer: ranking\n    traffic: 0.6", "experiments", "layer ranking"},
 		{"unknown goal metric", "goal: { metric: conversion,", "goal: { metric: sales,", "experiments.trend_weight.goal.metric", "not a declared metric"},
 		{"guardrail with two limits", "- { metric: latency_p95, max: 50 }", "- { metric: latency_p95, max: 50, max_increase: 0.1 }", "experiments.trend_weight.guardrails[1]", "exactly one"},

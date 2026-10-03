@@ -1,4 +1,4 @@
-# Marketplace, schema v2 (.claude/SCHEMA-V2.md). The v1 marketplace.yml stays as it is; this
+# Marketplace, schema v2. The v1 marketplace.yml stays as it is; this
 # one shows what v2 adds for a shop:
 #   - after a purchase: fewer substitutes (satiation), what goes with it (bought after), and the
 #     same kind again when it is due (recurrence), learned per category, never listed here;
@@ -168,7 +168,7 @@ knobs:
     maps: { recommenders.home.diversity: "x" }
 
 presets:
-  default:  { taste_vs_crowd: 0.5, trend_strength: 0.5 }
+  default:  { taste_vs_crowd: 0.5 }            # applies over knob defaults, so it must not pin trend_strength (the experiment moves that default)
   discover: { taste_vs_crowd: 0.8, trend_strength: 1, diversity: 0.8 }
   focused:  { taste_vs_crowd: 0.2, trend_strength: 0, diversity: 0.1 }
 
@@ -253,7 +253,9 @@ experiments:
       more_trend:
         share: 0.5
         set:
-          recommenders.home.weights.trending: 0.4
+          # trend_strength drives `trending`, and a knob always wins over a recommender weight, so
+          # the variant moves the knob's default (a user who moved the slider still gets their value)
+          knobs.trend_strength.default: 1
           rules.seller_cap.quota.max: 3
     goal: { metric: conversion, direction: up, min_effect: 0.02 }
     guardrails:

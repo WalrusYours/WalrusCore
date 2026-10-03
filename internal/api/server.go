@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
 )
 
@@ -33,11 +34,31 @@ type Config struct {
 type Server struct {
 	cfg      Config
 	schema   *schema.Service
+	rec      *recommend.Service
 	sessions *sessions
 	mux      *http.ServeMux
 }
 
-func New(cfg Config, svc *schema.Service) http.Handler {
+// Option configures the server beyond its required parts.
+type Option func(*options)
+
+type options struct {
+	ranker   recommend.Ranker
+	profiles recommend.Profiles
+}
+
+// WithRanker sets what generates candidates and scores them. Without it the recommend endpoints
+// answer with an empty list, because nothing has been ingested.
+func WithRanker(r recommend.Ranker) Option { return func(o *options) { o.ranker = r } }
+
+// WithProfiles supplies users' saved knob values.
+func WithProfiles(p recommend.Profiles) Option { return func(o *options) { o.profiles = p } }
+
+func New(cfg Config, svc *schema.Service, opts ...Option) http.Handler {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if cfg.MaxSchemaBytes == 0 {
 		cfg.MaxSchemaBytes = 1 << 20
 	}
@@ -47,7 +68,11 @@ func New(cfg Config, svc *schema.Service) http.Handler {
 	if cfg.SessionTTL == 0 {
 		cfg.SessionTTL = 8 * time.Hour
 	}
-	s := &Server{cfg: cfg, schema: svc, sessions: newSessions(cfg.SessionTTL), mux: http.NewServeMux()}
+	rec := recommend.NewService(svc, o.ranker)
+	if o.profiles != nil {
+		rec.WithProfiles(o.profiles)
+	}
+	s := &Server{cfg: cfg, schema: svc, rec: rec, sessions: newSessions(cfg.SessionTTL), mux: http.NewServeMux()}
 
 	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("GET /v1/health", s.health)
@@ -59,6 +84,8 @@ func New(cfg Config, svc *schema.Service) http.Handler {
 	s.mux.HandleFunc("PUT /v1/schema", s.requireAdmin(s.putSchema))
 	s.mux.HandleFunc("GET /v1/schema", s.requireAdmin(s.getSchema))
 	s.mux.HandleFunc("GET /v1/schema/history", s.requireAdmin(s.schemaHistory))
+
+	s.routeRecommend()
 	return s
 }
 

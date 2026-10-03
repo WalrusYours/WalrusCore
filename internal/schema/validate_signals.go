@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// signalParams checks each type's own keys (SCHEMA-V2.md 4.6). Unknown keys are reported by
+// signalParams checks each type's own keys. Unknown keys are reported by
 // signals(); this checks values and references.
 func (v *validator) signalParams(p string, sg SignalSpec) {
 	ents := v.signalEntities(sg)
@@ -286,8 +286,7 @@ func (v *validator) contextNumeric(p, field string) {
 	}
 }
 
-// trend checks a `trend` signal: recent engagement against what is ordinary (ALGORITHMS.md
-// 6.1).
+// trend checks a `trend` signal: recent engagement against what is ordinary.
 func (v *validator) trend(p string, sg SignalSpec, ents []string) {
 	against := "auto"
 	if raw, ok := sg.Params["against"]; ok {

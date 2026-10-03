@@ -11,7 +11,7 @@ import (
 )
 
 // Profile is a user's sparse taste vector over items: the sum of edge weights, each decayed
-// by 2^(-age / (scale · half_life)) (ALGORITHMS.md 2). scale is the horizon meta-parameter,
+// by 2^(-age / (scale · half_life)). scale is the horizon meta-parameter,
 // 1 meaning the schema half-lives. Interaction types without a half-life do not decay.
 // Negative schema weights (skip, hide) give negative entries.
 func Profile(

@@ -97,7 +97,7 @@ func TestValidateCatchesMistakes(t *testing.T) {
 	}
 }
 
-// Each case edits the trending signal of feed.yml so one rule is broken (ALGORITHMS.md 6.1).
+// Each case edits the trending signal of feed.yml so one rule is broken.
 func TestValidateTrendSignal(t *testing.T) {
 	base := exampleText(t, "feed.yml")
 	cases := []struct {

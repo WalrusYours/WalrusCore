@@ -1,6 +1,5 @@
 // Package schema models the YAML a platform pushes. These structs describe the schema
 // language itself, so a schema push changes their contents, never the code.
-// .claude/SCHEMA-V2.md is the reference for every section and key.
 package schema
 
 import (
