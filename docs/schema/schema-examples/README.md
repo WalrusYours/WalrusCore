@@ -122,7 +122,8 @@ signals:
 | `item_neighbors` | Items similar to what the user already engaged with. |
 | `user_neighbors` | Items that users with a similar history engaged with. |
 | `own_history` | Items the user has seen before (familiarity), without a hard exclusion. |
-| `global_count` | Popularity over a `window`, for example `window: 7d`. |
+| `global_count` | Popularity over a `window`, for example `window: 7d`. Size, not speed. |
+| `trend` | Items whose recent engagement is well above what is ordinary for them: acceleration, not size. Needs `window` and, for `against: own` or `auto`, a longer `baseline`. See below. |
 | `age_decay` | Fresh items. Needs `on: <timestamp attribute>` and a `half_life`. |
 | `low_exposure` | Items few people have seen, for discovery. |
 | `attribute_match` | Items whose attribute `on` matches a user value given in `against: "$user.<attribute>"`. |
@@ -130,6 +131,30 @@ signals:
 
 `default` is the weight when the user has touched no knob. A new signal type is code
 (register it in the signal registry); using an existing type is only configuration.
+
+A `trend` signal says what a trend is for your platform:
+
+```yaml
+trending:
+  type: trend
+  default: 0.2
+  window: 6h            # "now": the recent period measured
+  baseline: 7d          # the earlier period that defines an item's own ordinary pace
+  against: auto         # own | same_age | auto
+  on: created_at        # timestamp giving an item's age (not needed for against: own)
+  of: [like, comment, view]   # interactions that count (default: every positive-weight one)
+  count: people         # people | events
+  min: 3                # fewer engagements than this in the window is never a trend
+  ratio: 2              # how many times its ordinary pace counts as trending
+```
+
+It reads as one sentence: "at least 3 different people engaged in the last 6 hours, at
+twice the usual pace". `against: own` compares an item with its own earlier pace (it catches
+comebacks), `same_age` with what items of the same age normally get (it judges new releases
+fairly), and `auto` uses `own` once an item has enough history and `same_age` before.
+Required: `window`; `baseline` unless `against: same_age`; `on` unless `against: own`.
+Defaults: `against: auto`, `count: people`, `min: 1`, `ratio: 2`, and every positive-weight
+interaction for `of`. Unknown keys are rejected. Details and the formula: ALGORITHMS.md 6.1.
 
 ### `knobs`
 

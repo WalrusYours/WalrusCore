@@ -26,7 +26,8 @@ type DiffResult struct {
 }
 
 var (
-	breakingGroup = regexp.MustCompile(`^(entities\.[^.]+\.attributes\.[^.]+|entities\.[^.]+|interactions\.[^.]+|signals\.[^.]+)`)
+	// Removing a recommender is breaking too: hosts call it by name.
+	breakingGroup = regexp.MustCompile(`^(entities\.[^.]+\.attributes\.[^.]+|entities\.[^.]+|interactions\.[^.]+|signals\.[^.]+|recommenders\.[^.]+)`)
 	softGroup     = regexp.MustCompile(`^(knobs\.[^.]+|presets\.[^.]+|similarity\.[^.]+)`)
 )
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,10 +35,10 @@ func TestParseExampleSchemas(t *testing.T) {
 		knobs         int
 	}{
 		{"marketplace.yml", "listing", 3, 7, 4},
-		{"feed.yml", "post", 2, 6, 3},
+		{"feed.yml", "post", 2, 7, 3},
 	} {
 		s := load(t, tc.file)
-		if s.Recommendable != tc.recommendable {
+		if len(s.Recommendable) != 1 || s.Recommendable[0] != tc.recommendable {
 			t.Errorf("%s: recommendable = %q, want %q", tc.file, s.Recommendable, tc.recommendable)
 		}
 		if len(s.Entities) != tc.entities || len(s.Signals) != tc.signals || len(s.Knobs) != tc.knobs {
@@ -146,6 +147,7 @@ func TestParseDuration(t *testing.T) {
 		"3d":   72 * time.Hour,
 		"2w":   14 * 24 * time.Hour,
 		"1.5d": 36 * time.Hour,
+		"2y":   730 * 24 * time.Hour, // a year is 365 days
 	}
 	for in, want := range ok {
 		got, err := ParseDuration(in)
@@ -153,10 +155,14 @@ func TestParseDuration(t *testing.T) {
 			t.Errorf("ParseDuration(%q) = %v, %v; want %v", in, got.Std(), err, want)
 		}
 	}
-	for _, in := range []string{"3", "d", "3 d", "-3d", "3y", "abc", "1..5d"} {
+	for _, in := range []string{"3", "d", "3 d", "-3d", "3x", "abc", "1..5d"} {
 		if _, err := ParseDuration(in); err == nil {
 			t.Errorf("ParseDuration(%q) should fail", in)
 		}
+	}
+	// years parse but never print, so a v1 schema that says 365d keeps its canonical form
+	if got := Duration(365 * 24 * time.Hour).String(); got != "365d" {
+		t.Errorf("String() = %q, want 365d", got)
 	}
 	if got := Duration(72 * time.Hour).String(); got != "3d" {
 		t.Errorf("String() = %q, want 3d", got)
@@ -245,7 +251,9 @@ func nan() float64 { return math.NaN() }
 
 var knownSignalTypes = []string{
 	"item_neighbors", "user_neighbors", "own_history", "global_count",
-	"age_decay", "low_exposure", "attribute_match", "diversity_rerank",
+	"age_decay", "low_exposure", "attribute_match", "diversity_rerank", "trend",
+	"co_occurrence", "sequence", "mutual_connections", "attribute_target", "attribute_value",
+	"context_match", "provided", "formula", "satiation", "recurrence",
 }
 
 var metaTargets = []string{"interactions.half_life_scale", "constraint.energy_center"}
@@ -262,8 +270,10 @@ func TestExamplesAreConsistent(t *testing.T) {
 			s := load(t, name)
 			fail := func(format string, args ...any) { t.Helper(); t.Errorf(format, args...) }
 
-			if _, ok := s.Entities[s.Recommendable]; !ok {
-				fail("recommendable %q is not a declared entity", s.Recommendable)
+			for _, r := range s.Recommendable {
+				if _, ok := s.Entities[r]; !ok {
+					fail("recommendable %q is not a declared entity", r)
+				}
 			}
 			if _, ok := s.Entities["user"]; !ok {
 				fail("no user entity")
@@ -288,6 +298,9 @@ func TestExamplesAreConsistent(t *testing.T) {
 				}
 			}
 			for et, terms := range s.Similarity {
+				if et == "cross" { // cross-type terms: checked by Validate
+					continue
+				}
 				e, ok := s.Entities[et]
 				if !ok {
 					fail("similarity for undeclared entity %q", et)
@@ -312,12 +325,13 @@ func TestExamplesAreConsistent(t *testing.T) {
 			knobs := map[string]bool{}
 			for _, k := range s.Knobs {
 				knobs[k.ID] = true
-				if k.Range[0] >= k.Range[1] || k.Label == "" {
+				if r := k.EffectiveRange(); r[0] >= r[1] || k.Label.IsZero() {
 					fail("knob %s: bad range or empty label", k.ID)
 				}
 				for target := range k.Maps {
 					_, isSignal := s.Signals[target]
-					if !isSignal && !slices.Contains(metaTargets, target) {
+					// v2 targets are dotted paths (similarity.<e>.<term>.weight...), checked by Validate.
+					if !isSignal && !slices.Contains(metaTargets, target) && !strings.Contains(target, ".") {
 						fail("knob %s maps to %q, which is neither a signal nor a meta-parameter", k.ID, target)
 					}
 				}

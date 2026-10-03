@@ -97,6 +97,66 @@ func TestValidateCatchesMistakes(t *testing.T) {
 	}
 }
 
+// Each case edits the trending signal of feed.yml so one rule is broken (ALGORITHMS.md 6.1).
+func TestValidateTrendSignal(t *testing.T) {
+	base := exampleText(t, "feed.yml")
+	cases := []struct {
+		name, old, new, path, contains string
+	}{
+		{"missing window", "window: 6h, ", "", "signals.trending.window", "needs window"},
+		{"bad window", "window: 6h", "window: soon", "signals.trending.window", "duration"},
+		{"missing baseline", "baseline: 7d, ", "", "signals.trending.baseline", "needs baseline"},
+		{"bad baseline", "baseline: 7d", "baseline: never", "signals.trending.baseline", "duration"},
+		{"baseline not longer", "baseline: 7d", "baseline: 3h", "signals.trending.baseline", "longer than window"},
+		{"auto needs the item's age", "on: created_at, window: 6h", "window: 6h", "signals.trending.on", "needs on"},
+		{"age attribute must be a timestamp", "on: created_at, window: 6h", "on: topic, window: 6h", "signals.trending.on", "timestamp attribute"},
+		{"age attribute must exist", "on: created_at, window: 6h", "on: made_at, window: 6h", "signals.trending.on", "not an attribute"},
+		{"bad against", "against: auto", "against: sometimes", "signals.trending.against", "own, same_age or auto"},
+		{"bad count", "count: people", "count: users", "signals.trending.count", "people or events"},
+		{"fractional min", "min: 3,", "min: 2.5,", "signals.trending.min", "whole number"},
+		{"negative min", "min: 3,", "min: -1,", "signals.trending.min", "whole number"},
+		{"ratio of one", "ratio: 2", "ratio: 1", "signals.trending.ratio", "above 1"},
+		{"ratio not a number", "ratio: 2", "ratio: high", "signals.trending.ratio", "above 1"},
+		{"undeclared interaction", "of: [like, comment, view]", "of: [like, comment, glance]", "signals.trending.of[2]", "not a declared interaction"},
+		{"negative interaction", "of: [like, comment, view]", "of: [like, dislike]", "signals.trending.of[1]", "negative"},
+		{"empty list", "of: [like, comment, view]", "of: []", "signals.trending.of", "list of interaction names"},
+		{"misspelt key", "ratio: 2 }", "ratio: 2, rato: 3 }", "signals.trending.rato", "unknown key"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !strings.Contains(base, c.old) {
+				t.Fatalf("test setup: %q not found in the example", c.old)
+			}
+			issues := issuesFor(t, strings.Replace(base, c.old, c.new, 1))
+			for _, is := range issues {
+				if is.Path == c.path && strings.Contains(is.Message, c.contains) {
+					return
+				}
+			}
+			t.Errorf("no issue at %q containing %q; got %v", c.path, c.contains, issues)
+		})
+	}
+
+	// The other legitimate shapes are accepted: own history alone needs no item age, and
+	// same_age needs no baseline.
+	ok := []struct{ name, old, new string }{
+		{"against own, no age attribute", "on: created_at, window: 6h, baseline: 7d, against: auto", "window: 6h, baseline: 7d, against: own"},
+		{"against same_age, no baseline", "baseline: 7d, against: auto", "against: same_age"},
+		{"defaults for the optional keys", ", of: [like, comment, view], count: people, min: 3, ratio: 2", ""},
+		{"events", "count: people", "count: events"},
+	}
+	for _, c := range ok {
+		t.Run(c.name, func(t *testing.T) {
+			if !strings.Contains(base, c.old) {
+				t.Fatalf("test setup: %q not found in the example", c.old)
+			}
+			if issues := issuesFor(t, strings.Replace(base, c.old, c.new, 1)); len(issues) != 0 {
+				t.Errorf("want no issues, got %v", issues)
+			}
+		})
+	}
+}
+
 func TestValidateComputedAttributes(t *testing.T) {
 	base := exampleText(t, "news.yml")
 	text := strings.Replace(base, `computed: "len(title)"`, `computed: "len(headline)"`, 1)

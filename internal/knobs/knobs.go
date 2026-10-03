@@ -16,7 +16,7 @@ var (
 	ErrBadValue      = errors.New("knob value must be a finite number")
 )
 
-// Input, lowest to highest: defaults, default preset, Preset, Saved, Overrides.
+// Input, lowest to highest: knob defaults, default preset, Preset, Saved, Overrides.
 type Input struct {
 	Preset    string
 	Saved     map[string]float64
@@ -46,7 +46,7 @@ func ResolveInto(c *schema.Compiled, in Input, dst *Resolved) error {
 	dst.Knobs = slices.Grow(dst.Knobs[:0], len(c.Knobs))[:len(c.Knobs)]
 
 	for i, k := range c.Knobs {
-		dst.Knobs[i] = (k.Min + k.Max) / 2
+		dst.Knobs[i] = k.Default // declared default, or the middle of the range
 	}
 	if c.DefaultPreset != nil {
 		applyPreset(dst.Knobs, c.DefaultPreset)

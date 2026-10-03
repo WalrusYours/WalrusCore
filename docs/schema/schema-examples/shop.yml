@@ -1,0 +1,328 @@
+# Marketplace, schema v2 (.claude/SCHEMA-V2.md). The v1 marketplace.yml stays as it is; this
+# one shows what v2 adds for a shop:
+#   - after a purchase: fewer substitutes (satiation), what goes with it (bought after), and the
+#     same kind again when it is due (recurrence), learned per category, never listed here;
+#   - "not interested" with a reason;
+#   - several surfaces (home, more like this, bought together, basket, popular now);
+#   - sponsored slots and seller caps as rules;
+#   - online metrics, an A/B test with a holdout, and the DSA art. 38 non-profiled option.
+version: 1
+
+meta:
+  name: Loop
+  description: Second-hand marketplace.
+  owners: [platform-team@example.com]
+  locales: [en, ro, ru]
+  default_locale: en
+
+entities:
+  user:
+    key: id
+    attributes:
+      city:            { type: categorical }
+      country:         { type: categorical }
+      personalization: { type: bool }              # false = the user chose the non-profiled feed
+  seller:
+    key: id
+    attributes:
+      rating: { type: float, range: [0, 5] }
+  category:
+    key: id
+    parent: parent_id                              # teapots inside kitchen
+    attributes:
+      parent_id:       { type: ref, entity: category, optional: true }
+      recurrence_days: { type: int, optional: true }   # data the platform knows, not schema
+  listing:
+    key: id
+    lifecycle:
+      created: created_at
+      active: { attribute: status, in: [active] }
+    attributes:
+      seller_id:   { type: ref, entity: seller }
+      category:    { type: ref, entity: category }
+      tags:        { type: set, of: string }
+      price:       { type: float, range: [0, 100000] }
+      city:        { type: categorical }
+      status:      { type: categorical }
+      sponsored:   { type: bool }
+      created_at:  { type: timestamp }
+      text_embedding: { type: vector, dim: 384, optional: true }
+
+interactions:
+  impression: { kind: exposure, target: listing, retention: 30d }
+  view:       { kind: positive, weight: 1.0, value: seconds, transform: log1p, half_life: 3d }
+  favourite:  { kind: positive, weight: 4.0, half_life: 30d, dedupe: per_item }
+  add_to_cart: { kind: positive, weight: 3.0, half_life: 7d, fields: { cart_id: { type: string } } }
+  purchase:   { kind: conversion, weight: 8.0, half_life: 180d, fulfils: true }
+  owned:      { kind: positive, weight: 0, fulfils: true }        # "I already have this"
+  hide:       { kind: negative, weight: -5.0, half_life: 90d, dedupe: per_item }
+
+context:
+  device: { type: categorical, values: [phone, desktop] }
+  hour:   { type: int, derive: hour }
+  pinned: { type: set, of: string, optional: true }               # editor-pinned listings
+
+similarity:
+  listing:
+    - { id: category, on: category, metric: equals,  weight: 0.35, k: 50 }
+    - { id: tags,     on: tags,     metric: jaccard, weight: 0.35 }
+    - { id: text,     on: text_embedding, metric: cosine, weight: 0.20, index: hnsw }
+    - { id: price,    on: price,    metric: log_ratio, weight: 0.10 }
+  user:
+    - via: interactions
+      of: [favourite, add_to_cart, purchase]
+      metric: cosine
+      k: 50
+      min_shared: 3
+      damp_popular: true
+
+signals:
+  content:         { type: item_neighbors, default: 0.5, label: { en: Similar to what you like, ro: Similar cu ce îți place, ru: "Похоже на то, что вам нравится" } }
+  people_like_you: { type: user_neighbors, of: [favourite, purchase], min_neighbors: 2, default: 0.4,
+                     explain: { en: "{neighbors} people with similar taste liked this", ro: "{neighbors} persoane cu gusturi similare au apreciat asta", ru: "{neighbors} людей с похожим вкусом отметили это" } }
+  popularity:      { type: global_count, window: 7d, of: [favourite, purchase], default: 0.1 }
+  trending:        { type: trend, window: 6h, baseline: 7d, against: auto, of: [view, favourite, purchase], count: people, min: 5, ratio: 2, default: 0.2 }
+  recency:         { type: age_decay, half_life: 5d, default: 0.3 }   # age from lifecycle.created
+  exploration:     { type: low_exposure, of: [impression], default: 0.1 }
+
+  # After a purchase
+  already_have:    { type: satiation, of: [purchase, owned], by: category, level: 0, default: -0.6,
+                     explain: "Shown lower: you already have one" }
+  restock:         { type: recurrence, of: [purchase], default: 0.3, explain: "Time to restock?" }
+  bought_after:    { type: co_occurrence, of: [purchase], order: after, window: 30d, min_support: 5, measure: lift, default: 0.4,
+                     explain: "People who bought this went on to buy it" }
+  bought_together: { type: co_occurrence, of: [add_to_cart], group_by: cart_id, measure: lift, min_support: 5, default: 0.5 }
+
+  seller_quality:  { type: attribute_value, on: price, default: 0.0 }  # placeholder weight: off unless a knob raises it
+  evening_mood:    { type: formula, expr: "if($context.hour >= 19, 1, 0) * if($item.sponsored, 0, 1)", default: 0.05 }
+
+constraints:
+  - { id: active,      require: { attribute: status, equals: active } }
+  - { id: not_hidden,  exclude: { interacted: [hide] } }
+  - { id: not_bought,  exclude: { interacted: [purchase] } }
+  - { id: not_in_seed, exclude: { in_seed: true } }
+
+rules:
+  - { id: sponsored_slot, when: "$item.sponsored", place: { at: [3, 9] } }
+  - { id: seller_cap,     quota: { attribute: seller_id, max: 2, per: 10 } }
+  - { id: fresh_share,    quota: { when: "age < 86400", min_share: 0.2, top: 10 } }
+  - { id: frequency_cap,  cap: { exposure: impression, max: 3, within: 1d } }
+  - { id: pinned,         pin: { ids: "$context.pinned", at: 1 } }
+
+knobs:
+  - id: taste_vs_crowd
+    group: { en: What I like, ro: Ce îmi place, ru: Что мне нравится }
+    label: { en: Taste vs crowd, ro: Gust sau mulțime, ru: Вкус или большинство }
+    low:   { en: Just my taste, ro: Doar gustul meu, ru: Только мой вкус }
+    high:  { en: What people like me like, ro: Ce le place celor ca mine, ru: Что нравится похожим на меня }
+    range: [0, 1]
+    default: 0.5
+    maps: { content: "0.5 + 0.5 * (1 - x)", people_like_you: "x" }
+  - id: after_buying
+    group: { en: After I buy, ro: După cumpărare, ru: После покупки }
+    label: { en: Show alternatives to what I bought, ro: Arată alternative la ce am cumpărat, ru: Показывать замены купленного }
+    low:   { en: Rarely, ro: Rar, ru: Редко }
+    high:  { en: As usual, ro: Ca de obicei, ru: Как обычно }
+    range: [0, 1]
+    default: 0
+    maps: { already_have: "-0.6 * (1 - x)" }
+  - id: restock_reminders
+    kind: toggle
+    group: { en: After I buy, ro: După cumpărare, ru: После покупки }
+    label: { en: Remind me to restock, ro: Amintește-mi să reaprovizionez, ru: Напоминать о повторной покупке }
+    default: 1
+    maps: { restock: "0.3 * x" }
+  - id: trend_strength
+    kind: choice
+    group: { en: Discovery, ro: Descoperire, ru: Открытия }
+    label: { en: Trending items, ro: Produse în trend, ru: Популярное сейчас }
+    options:
+      - { value: 0,   label: { en: Hide,  ro: Ascunde, ru: Скрыть } }
+      - { value: 0.5, label: { en: Some,  ro: Puține,  ru: Немного } }
+      - { value: 1,   label: { en: Plenty, ro: Multe,  ru: Много } }
+    default: 0.5
+    maps: { trending: "0.4 * x" }
+  - id: category_vs_tags
+    group: { en: Similar items, ro: Produse similare, ru: Похожие товары }
+    label: { en: Similar by, ro: Similar după, ru: Похожие по }
+    low:   { en: Category, ro: Categorie, ru: Категории }
+    high:  { en: Tags, ro: Etichete, ru: Тегам }
+    range: [0, 1]
+    default: 0.5
+    scope: [home, related]
+    maps: { similarity.listing.category.weight: "lerp(0.6, 0.1, x)", similarity.listing.tags.weight: "lerp(0.1, 0.6, x)" }
+  - id: views_count
+    group: { en: What counts, ro: Ce contează, ru: Что учитывается }
+    label: { en: Browsing counts, ro: Contează navigarea, ru: Просмотры учитываются }
+    low:   { en: Barely, ro: Deloc, ru: Почти нет }
+    high:  { en: A lot, ro: Mult, ru: Сильно }
+    range: [0, 1]
+    default: 0.5
+    maps: { interactions.view.weight_scale: "lerp(0, 2, x)", interactions.view.half_life_scale: "lerp(0.5, 2, x)" }
+  - id: diversity
+    group: { en: Discovery, ro: Descoperire, ru: Открытия }
+    label: { en: Variety, ro: Varietate, ru: Разнообразие }
+    range: [0, 1]
+    default: 0.3
+    scope: [home]
+    maps: { recommenders.home.diversity: "x" }
+
+presets:
+  default:  { taste_vs_crowd: 0.5, trend_strength: 0.5 }
+  discover: { taste_vs_crowd: 0.8, trend_strength: 1, diversity: 0.8 }
+  focused:  { taste_vs_crowd: 0.2, trend_strength: 0, diversity: 0.1 }
+
+recommenders:
+  home:
+    label: { en: For you, ro: Pentru tine, ru: Для вас }
+    for: [listing]
+    seed: user
+    candidates:
+      - { source: item_neighbors, cap: 200 }
+      - { source: user_neighbors, cap: 150 }
+      - { source: trend, signal: trending, cap: 50 }
+      - { source: fresh, cap: 50 }
+      - { source: unexposed, cap: 20 }
+    signals: [content, people_like_you, popularity, trending, recency, exploration, already_have, restock, bought_after, evening_mood]
+    weights: { trending: 0.2 }
+    constraints: [active, not_hidden, not_bought]
+    rules: [sponsored_slot, seller_cap, fresh_share, frequency_cap, pinned]
+    rerank: { diversity: { on: seller_id, lambda: 0.3 } }
+    knobs: [taste_vs_crowd, after_buying, restock_reminders, trend_strength, category_vs_tags, views_count, diversity]
+    limit: { default: 30, max: 100 }
+    fallback:
+      - { when: "profile.size == 0", use: popular_now }
+
+  related:                                     # "more like this" under a listing
+    for: [listing]
+    seed: item
+    blend_user: 0.2
+    signals: [content, people_like_you, trending]
+    constraints: [active, not_hidden]
+    rules: [seller_cap]
+    knobs: [taste_vs_crowd, category_vs_tags]
+    limit: { default: 12, max: 30 }
+
+  bought_together:
+    for: [listing]
+    seed: item
+    candidates: [{ source: co_occurrence, signal: bought_together, cap: 100 }]
+    signals: [bought_together, content]
+    constraints: [active, not_hidden]
+    limit: { default: 6, max: 12 }
+
+  basket:                                      # "you might also need", for a cart
+    for: [listing]
+    seed: items
+    seed_aggregate: max                        # fit any item in the cart, not their average
+    candidates:
+      - { source: co_occurrence, signal: bought_together, cap: 150 }
+      - { source: co_occurrence, signal: bought_after, cap: 100 }
+    signals: [bought_together, bought_after, content]
+    weights: { bought_after: "0.2 + 0.2 * min(seed.size, 3) / 3" }
+    constraints: [active, not_hidden, not_in_seed]
+
+  popular_now:                                 # non-personalised: cold start and the art. 38 option
+    for: [listing]
+    seed: none
+    signals: [trending, popularity, recency]
+    constraints: [active]
+    rules: [seller_cap]
+
+metrics:
+  ctr:          { ratio: [view, impression] }
+  conversion:   { ratio: [purchase, impression], attribution: 24h }
+  favourite_rate: { ratio: [favourite, impression] }
+  hide_rate:    { ratio: [hide, impression] }
+  dwell:        { mean: view.value, per: impression }
+  retention_7d: { returning_users: 7d }
+  diversity:    { list: ild }
+  latency_p95:  { system: latency, quantile: 0.95 }
+
+experiments:
+  trend_weight:
+    recommender: home
+    status: running
+    unit: user
+    layer: ranking
+    traffic: 0.5
+    audience: { when: "$user.country == 'MD'" }
+    method: ab
+    variants:
+      control: { share: 0.5 }
+      more_trend:
+        share: 0.5
+        set:
+          recommenders.home.weights.trending: 0.4
+          rules.seller_cap.quota.max: 3
+    goal: { metric: conversion, direction: up, min_effect: 0.02 }
+    guardrails:
+      - { metric: hide_rate, max_increase: 0.10 }
+      - { metric: latency_p95, max: 50 }
+    stop: { sequential: true, confidence: 0.95, min_units: 2000, max_duration: 21d }
+    gate: { offline: { metric: ndcg, max_drop: 0.01 } }
+    on_finish: propose
+
+  knob_panel:                                  # does showing more knobs change satisfaction?
+    recommender: home
+    status: draft
+    layer: interface
+    traffic: 0.2
+    method: ab
+    variants:
+      control: { share: 0.5 }
+      fewer_knobs:
+        share: 0.5
+        set:
+          recommenders.home.knobs: [taste_vs_crowd, trend_strength]
+    goal: { metric: retention_7d, direction: up }
+    guardrails:
+      - { metric: hide_rate, max_increase: 0.05 }
+
+holdout: { share: 0.05, recommender: popular_now }
+
+evaluation:
+  split: { by: time, holdout_last: 7d }
+  k: [10, 30]
+  metrics: [ndcg, recall, ild, coverage, novelty, gini]
+  grid: { taste_vs_crowd: [0, 0.5, 1], trend_strength: [0, 0.5, 1] }
+
+privacy:
+  retention: { default: 365d }
+  opt_out: { attribute: personalization, equals: false, use: popular_now }
+
+feedback:
+  reasons:
+    have_it:
+      label: { en: I already have this, ro: Am deja asta, ru: У меня уже есть }
+      applies_to: { same: category }
+      effect: satiate
+      until: recurrence
+    not_my_taste:
+      label: { en: Not my taste, ro: Nu e pe gustul meu, ru: Не в моём вкусе }
+      applies_to: { similar: 0.7, terms: [category, tags] }
+      effect: { taste: -1 }
+    seen_too_often:
+      label: { en: I have seen this too many times, ro: Am văzut asta de prea multe ori, ru: Видел это слишком часто }
+      applies_to: item
+      effect: hide
+      until: 30d
+    fewer_from_seller:
+      label: { en: Fewer listings from this seller, ro: Mai puține anunțuri de la acest vânzător, ru: Меньше объявлений этого продавца }
+      applies_to: { same: seller_id }
+      effect: { penalty: 0.8 }
+      until: forever
+    offensive:
+      label: { en: This is offensive, ro: Este ofensator, ru: Это оскорбительно }
+      applies_to: item
+      effect: hide
+      also: report
+
+recurrence:
+  of: [purchase, owned]
+  group_by: category
+  learn: { window: 2y, min_users: 50 }
+  never_below: 0.10
+  from: category.recurrence_days
+
+recommendable: listing

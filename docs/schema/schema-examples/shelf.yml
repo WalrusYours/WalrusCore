@@ -1,0 +1,167 @@
+# Books and films in one profile, schema v2 (.claude/SCHEMA-V2.md). What it shows:
+#   - two recommendable types; taste learned across them (`from`), and a content bridge
+#     through a shared vocabulary of genres (`similarity.cross`);
+#   - one home list mixing both types at fixed shares;
+#   - "up next" from the current session, a watch party for a group, people you may know;
+#   - interleaving to compare two rankings with little traffic;
+#   - consent before reading history from one type to suggest the other.
+version: 1
+
+meta:
+  name: Shelf
+  description: Books and films, one profile.
+  locales: [en, ru, ro]
+  default_locale: en
+
+entities:
+  user:
+    key: id
+    attributes:
+      city:            { type: categorical }
+      age:             { type: int, optional: true }
+      share_history:   { type: bool }            # consent to use reading for films and back
+      personalization: { type: bool }
+      discoverable:    { type: bool }            # may appear in "people you may know"
+  book:
+    key: id
+    lifecycle: { created: published_at }
+    attributes:
+      genres:       { type: set, of: string, vocab: genre }
+      author:       { type: categorical }
+      pages:        { type: int, range: [1, 5000] }
+      published_at: { type: timestamp }
+  film:
+    key: id
+    lifecycle: { created: released_at }
+    attributes:
+      genres:      { type: set, of: string, vocab: genre }
+      director:    { type: categorical }
+      minutes:     { type: int, range: [1, 600] }
+      age_rating:  { type: int, range: [0, 21] }
+      released_at: { type: timestamp }
+
+interactions:
+  impression: { kind: exposure, target: book }
+  film_impression: { kind: exposure, target: film }
+  read:       { kind: positive, weight: 3, target: book, half_life: 120d, value: fraction, transform: identity, fulfils: true }
+  watch:      { kind: positive, weight: 3, target: film, half_life: 120d, session: true, fulfils: true }
+  rate_book:  { kind: explicit, weight: 4, target: book, value: stars, transform: "(v - 3) / 2" }
+  rate_film:  { kind: explicit, weight: 4, target: film, value: stars, transform: "(v - 3) / 2" }
+  follow:     { kind: positive, weight: 2, target: user }
+  not_for_me: { kind: negative, weight: -4, target: book }
+
+similarity:
+  book:
+    - { id: genre,  on: genres, metric: jaccard, weight: 0.7 }
+    - { id: author, on: author, metric: equals,  weight: 0.3 }
+  film:
+    - { id: genre,    on: genres,   metric: jaccard, weight: 0.7 }
+    - { id: director, on: director, metric: equals,  weight: 0.3 }
+  user:
+    - { via: interactions, of: [read, watch, rate_book, rate_film], metric: cosine, k: 50, min_shared: 3, damp_popular: true, from: [book, film] }
+  cross:
+    - { between: [book, film], on: genres, metric: jaccard, weight: 1 }
+
+signals:
+  books_like_yours: { type: item_neighbors, for: [book], default: 0.5,
+                      label: { en: Books like yours, ru: Книги как ваши, ro: Cărți ca ale tale } }
+  films_like_yours: { type: item_neighbors, for: [film], from: [film, book], default: 0.5,
+                      label: { en: Films like what you read and watch, ru: "Фильмы как то, что вы читаете и смотрите", ro: Filme ca ce citești și vezi } }
+  people_like_you:  { type: user_neighbors, for: [book, film], from: [book, film], of: [read, watch], min_neighbors: 2, default: 0.4,
+                      explain: { en: "{neighbors} people like you enjoyed this", ru: "{neighbors} похожих на вас людей понравилось это", ro: "{neighbors} persoane ca tine s-au bucurat de asta" } }
+  new_releases:     { type: age_decay, for: [book, film], half_life: 30d, default: 0.2 }
+  next_episode:     { type: sequence, for: [film], of: [watch], gap: 6h, default: 0.6 }
+  mutuals:          { type: mutual_connections, for: [user], via: follow, default: 0.6 }
+  same_city:        { type: attribute_match, for: [user], on: city, against: "$user.city", default: 0.2 }
+  short_read:       { type: attribute_target, for: [book], on: pages, target: knob, default: 0.0 }
+  already_read:     { type: satiation, for: [book], of: [read], by: author, default: -0.3 }
+
+constraints:
+  - { id: age_ok,       for: [film], exclude: { attribute: age_rating, gt: "$user.age", when: "$user.age != null" } }
+  - { id: not_disliked, for: [book], exclude: { interacted: [not_for_me] } }
+  - { id: not_self,     for: [user], exclude: { in_seed: true } }   # with a user seed, the seed is you
+  - { id: discoverable, for: [user], require: { attribute: discoverable, equals: true } }
+
+knobs:
+  - id: books_shape_films
+    kind: toggle
+    label: { en: Use what I read to suggest films, ru: Учитывать прочитанное при выборе фильмов, ro: Folosește ce citesc pentru filme }
+    default: 1
+    maps: { signals.films_like_yours.from.book: "x" }
+  - id: books_vs_films
+    label: { en: More books or more films, ru: Больше книг или фильмов, ro: Mai multe cărți sau filme }
+    low:   { en: Books, ru: Книги, ro: Cărți }
+    high:  { en: Films, ru: Фильмы, ro: Filme }
+    range: [0, 1]
+    default: 0.5
+    scope: [home]
+    maps: { recommenders.home.mix.book: "1 - x", recommenders.home.mix.film: "x" }
+  - id: reading_length
+    label: { en: Book length, ru: Длина книги, ro: Lungimea cărții }
+    low:   { en: Short, ru: Короткие, ro: Scurte }
+    high:  { en: Long, ru: Длинные, ro: Lungi }
+    range: [0, 1]
+    default: 0.5
+    maps: { attribute.book.pages.target: "lerp(100, 900, x)", short_read: "0.2" }
+
+recommenders:
+  home:
+    label: { en: For you, ru: Для вас, ro: Pentru tine }
+    for: [book, film]
+    seed: user
+    signals: [books_like_yours, films_like_yours, people_like_you, new_releases, short_read, already_read]
+    constraints: [age_ok, not_disliked]
+    mix: { by: entity, shares: { book: 0.5, film: 0.5 } }
+    knobs: [books_shape_films, books_vs_films, reading_length]
+
+  up_next:
+    for: [film]
+    seed: session
+    seed_aggregate: max
+    candidates: [{ source: sequence, signal: next_episode, cap: 50 }, { source: item_neighbors, cap: 100 }]
+    signals: [next_episode, films_like_yours]
+    constraints: [age_ok]
+
+  watch_party:
+    for: [film]
+    seed: users
+    group: { aggregate: least_misery }       # nobody in the group should hate it
+    signals: [films_like_yours, people_like_you]
+    constraints: [age_ok]
+
+  people_you_may_know:
+    for: [user]
+    seed: user
+    candidates: [{ source: mutuals, signal: mutuals, cap: 200 }, { source: user_neighbors, cap: 100 }]
+    signals: [mutuals, same_city]
+    constraints: [not_self, discoverable]
+
+  popular_now:
+    for: [book, film]
+    seed: none
+    signals: [new_releases]
+    mix: { by: entity, shares: { book: 0.5, film: 0.5 } }
+
+metrics:
+  book_ctr: { ratio: [read, impression] }
+  film_ctr: { ratio: [watch, film_impression] }
+
+experiments:
+  cross_type_weight:
+    recommender: home
+    status: running
+    traffic: 1
+    method: interleaving                       # one list, picks credited to each variant
+    variants:
+      control: { share: 0.5 }
+      stronger_cross:
+        share: 0.5
+        set:
+          signals.films_like_yours.default: 0.8
+    goal: { metric: film_ctr, direction: up }
+
+privacy:
+  opt_out: { attribute: personalization, equals: false, use: popular_now }
+  cross_type_consent: { attribute: share_history, required_for: [from] }
+
+recommendable: [book, film]

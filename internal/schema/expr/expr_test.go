@@ -120,6 +120,39 @@ func TestVars(t *testing.T) {
 	}
 }
 
+// Schema v2 expressions name values by namespace: $item.rating, $context.hour, seed.size.
+func TestNamespacedNames(t *testing.T) {
+	x, err := Compile("$item.rating / 5 * if($context.hour >= 18, 1, 0.5) + seed.mean.energy - seed.size")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := x.Vars()
+	want := []string{"$context.hour", "$item.rating", "seed.mean.energy", "seed.size"}
+	if len(got) != len(want) {
+		t.Fatalf("Vars = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Vars = %v, want %v", got, want)
+		}
+	}
+	v, err := x.Eval(Env{
+		"$item.rating": domain.Num(4), "$context.hour": domain.Num(20),
+		"seed.mean.energy": domain.Num(0.5), "seed.size": domain.Num(2),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, _ := v.AsFloat(); f != 4.0/5*1+0.5-2 {
+		t.Errorf("value = %v", f)
+	}
+	for _, src := range []string{"$", "$1", "$.a", "a.", "a.1", "$item.", "seed..size"} {
+		if _, err := Compile(src); err == nil {
+			t.Errorf("Compile(%q) should fail", src)
+		}
+	}
+}
+
 func TestCompileErrors(t *testing.T) {
 	for _, src := range []string{
 		"", "1 +", "(1", "1)", "foo(1)", "len()", "len(1, 2)", "min()", "1 $ 2", "'unterminated",

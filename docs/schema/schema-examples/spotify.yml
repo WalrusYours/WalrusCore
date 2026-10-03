@@ -1,4 +1,7 @@
 # Music streaming. Adapted from ideas/examples/spotify.schema.yml; presets now set knobs only.
+# Schema v2 parts (.claude/SCHEMA-V2.md): a home feed that is exactly the v1 behaviour, and
+# "you might also add" for a playlist (seed: items), which learns from what other people put
+# in the same playlists.
 version: 1
 
 entities:
@@ -38,17 +41,22 @@ interactions:
   skip:            { weight: -1.5, value: seconds_before_skip, transform: "1 - min(v, 30) / 30", half_life: 14d }
   repeat:          { weight: 2.5,  half_life: 7d }
   save:            { weight: 4.0,  half_life: 90d }
-  add_to_playlist: { weight: 4.0,  half_life: 90d }
+  add_to_playlist: { weight: 4.0,  half_life: 90d, fields: { playlist_id: { type: string } } }
   search_play:     { weight: 3.0,  half_life: 7d }
   share:           { weight: 5.0,  half_life: 60d }
   follow_artist:   { weight: 4.0,  target: artist, half_life: 180d }
 
+context:
+  title_words:  { type: set, of: string, optional: true }   # words of the playlist title
+  genre:        { type: categorical, optional: true }
+  strict_genre: { type: bool, optional: true }              # the host app's "only this genre" switch
+
 similarity:
   track:
-    - { on: [energy, valence, danceability, acousticness], metric: cosine, weight: 0.35 }
-    - { on: genres,          metric: jaccard, weight: 0.25 }
-    - { on: audio_embedding, metric: cosine,  weight: 0.30 }
-    - { on: artist_id,       metric: equals,  weight: 0.10 }
+    - { id: audio,     on: [energy, valence, danceability, acousticness], metric: cosine, weight: 0.35 }
+    - { id: genres,    on: genres,          metric: jaccard, weight: 0.25 }
+    - { id: embedding, on: audio_embedding, metric: cosine,  weight: 0.30, index: hnsw }
+    - { id: artist,    on: artist_id,       metric: equals,  weight: 0.10 }
   user:
     - { via: interactions, metric: cosine }
 
@@ -57,9 +65,20 @@ signals:
   collaborative: { type: user_neighbors,   default: 0.5 }
   familiarity:   { type: own_history,      default: 0.3 }
   popularity:    { type: global_count,     default: 0.1, window: 30d }
+  # Popular is size, trending is speed. A new release by a famous artist is both on day one
+  # (it beats what new releases normally get) and only popular three weeks later.
+  trending:      { type: trend,            default: 0.2, on: release_date, window: 3d, baseline: 30d, against: auto, of: [play, save, add_to_playlist, share], count: people, min: 50, ratio: 3 }
   recency:       { type: age_decay,        default: 0.2, on: release_date, half_life: 21d }
   exploration:   { type: low_exposure,     default: 0.1 }
   artist_spread: { type: diversity_rerank, on: artist_id, default: 0.3 }
+
+  # "You might also add": what fits a playlist rather than the listener's general taste.
+  co_listed:   { type: co_occurrence, of: [add_to_playlist], group_by: playlist_id, measure: lift, min_support: 3, default: 0.4,
+                 explain: "Often added to playlists with {seed_items}" }
+  sounds_like: { type: item_neighbors, terms: [audio, embedding], default: 0.25 }
+  genre_fit:   { type: item_neighbors, terms: [genres], default: 0.15 }
+  energy_fit:  { type: attribute_target, on: energy, target: seed.mean, default: 0.1 }
+  title_match: { type: context_match, on: genres, against: $context.title_words, default: 0.5 }
 
 knobs:
   - id: taste_vs_crowd
@@ -79,6 +98,36 @@ knobs:
     range: [0, 1]
     maps: { constraint.energy_center: "x" }
 
+  # Knobs for whoever is building the playlist.
+  - id: vibe_vs_branch_out
+    label: "Stick to the vibe  <->  Branch out"
+    group: Playlist suggestions
+    range: [0, 1]
+    default: 0.3
+    scope: [playlist_add]
+    maps: { sounds_like: "0.35 * (1 - x)", exploration: "0.3 * x" }
+  - id: deep_cuts_vs_hits
+    label: "Deep cuts  <->  Hits"
+    group: Playlist suggestions
+    range: [0, 1]
+    default: 0.3
+    scope: [playlist_add]
+    maps: { popularity: "0.2 * x" }
+  - id: whole_vs_any
+    label: "Fit the whole playlist  <->  Fit any song in it"
+    group: Playlist suggestions
+    range: [0, 1]
+    default: 0
+    scope: [playlist_add]
+    maps: { recommenders.playlist_add.seed_aggregate: "x" }
+  - id: mix_in_my_taste
+    kind: toggle
+    label: Also use my own taste
+    group: Playlist suggestions
+    default: 1
+    scope: [playlist_add]
+    maps: { recommenders.playlist_add.blend_user: "0.15 * x" }
+
 presets:
   default:         { taste_vs_crowd: 0.5, horizon: 0.5, familiar_vs_new: 0.4, energy: 0.5 }
   discover_weekly: { taste_vs_crowd: 0.7, horizon: 0.6, familiar_vs_new: 0.9 }
@@ -87,9 +136,50 @@ presets:
   wind_down:       { familiar_vs_new: 0.2, energy: 0.15 }
 
 constraints:
-  - require: { attribute: available_in, contains: "$user.country" }
-  - exclude: { attribute: explicit, equals: true, when: "$user.explicit_allowed == false" }
-  - exclude: { interacted: [skip], count_gte: 3, within: 30d }
-  - exclude: { interacted: [play], within: 2h }
+  - { id: available,     require: { attribute: available_in, contains: "$user.country" } }
+  - { id: explicit_ok,   exclude: { attribute: explicit, equals: true, when: "$user.explicit_allowed == false" } }
+  - { id: skipped_often, exclude: { interacted: [skip], count_gte: 3, within: 30d } }
+  - { id: just_played,   exclude: { interacted: [play], within: 2h } }
+  - { id: not_in_seed,   exclude: { in_seed: true } }                      # already in the playlist
+  - { id: strict_genre,  require: { attribute: genres, contains: "$context.genre", when: "$context.strict_genre == true" } }
+
+rules:
+  - { id: one_per_artist, quota: { attribute: artist_id, max: 1, per: 10 } }
+
+recommenders:
+  home:                             # the v1 behaviour, unchanged
+    label: For you
+    for: [track]
+    seed: user
+    signals: [content, collaborative, familiarity, popularity, trending, recency, exploration, artist_spread]
+    constraints: [available, explicit_ok, skipped_often, just_played]
+    knobs: [taste_vs_crowd, horizon, familiar_vs_new, energy]
+
+  playlist_add:                     # "you might also add"
+    label: You might also add
+    for: [track]
+    seed: items                     # the playlist's tracks
+    seed_aggregate: mean
+    blend_user: 0.15
+    candidates:
+      - { source: co_occurrence, signal: co_listed, cap: 200 }
+      - { source: item_neighbors, cap: 200 }
+    signals: [co_listed, sounds_like, genre_fit, energy_fit, collaborative, popularity, exploration]
+    weights:
+      co_listed: 0.4
+      energy_fit: "0.1 * min(seed.size, 5) / 5"                  # trust the playlist's centre as it grows
+      collaborative: "0.15 + 0.25 * max(0, 3 - seed.size) / 3"   # lean on the owner early
+    constraints: [available, explicit_ok, not_in_seed, strict_genre]
+    rules: [one_per_artist]
+    knobs: [vibe_vs_branch_out, deep_cuts_vs_hits, whole_vs_any, mix_in_my_taste]
+    limit: { default: 20, max: 50 }
+    fallback:
+      - { when: "seed.size == 0", use: from_title }      # an empty playlist: only its title to go on
+
+  from_title:
+    for: [track]
+    seed: user
+    signals: [title_match, collaborative, popularity]
+    constraints: [available, explicit_ok]
 
 recommendable: track

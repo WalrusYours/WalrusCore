@@ -9,10 +9,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Duration is a schema duration (3d, 12h, 2w); time.ParseDuration has no days or weeks.
+// Duration is a schema duration (3d, 12h, 2w, 1y); time.ParseDuration has no days, weeks
+// or years. A year is 365 days.
 type Duration time.Duration
 
-var durationRe = regexp.MustCompile(`^(\d+(?:\.\d+)?)([smhdw])$`)
+var durationRe = regexp.MustCompile(`^(\d+(?:\.\d+)?)([smhdwy])$`)
 
 var durationUnit = map[string]time.Duration{
 	"s": time.Second,
@@ -20,6 +21,7 @@ var durationUnit = map[string]time.Duration{
 	"h": time.Hour,
 	"d": 24 * time.Hour,
 	"w": 7 * 24 * time.Hour,
+	"y": 365 * 24 * time.Hour,
 }
 
 func ParseDuration(s string) (Duration, error) {
@@ -28,7 +30,7 @@ func ParseDuration(s string) (Duration, error) {
 	}
 	m := durationRe.FindStringSubmatch(s)
 	if m == nil {
-		return 0, fmt.Errorf("invalid duration %q (use a number and one of s, m, h, d, w, e.g. 3d)", s)
+		return 0, fmt.Errorf("invalid duration %q (use a number and one of s, m, h, d, w, y, e.g. 3d)", s)
 	}
 	n, err := strconv.ParseFloat(m[1], 64)
 	if err != nil {

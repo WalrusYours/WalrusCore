@@ -107,11 +107,21 @@ func lex(src string) ([]token, error) {
 			}
 			out = append(out, token{kind: tStr, text: src[i+1 : j]})
 			i = j + 1
-		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
-			j := i
-			for j < len(src) && (src[j] == '_' || src[j] >= 'a' && src[j] <= 'z' || src[j] >= 'A' && src[j] <= 'Z' || src[j] >= '0' && src[j] <= '9') {
-				j++
+		case isIdentStart(c) || c == '$' && i+1 < len(src) && isIdentStart(src[i+1]):
+			// A name: x, v, or a namespaced one such as $item.rating, $context.hour, seed.size.
+			// Each dot must be followed by another name part, so "a." and "a.1" are not names.
+			j := i + 1
+			for j < len(src) {
+				switch {
+				case isIdentStart(src[j]) || src[j] >= '0' && src[j] <= '9':
+					j++
+				case src[j] == '.' && j+1 < len(src) && isIdentStart(src[j+1]):
+					j += 2
+				default:
+					goto done
+				}
 			}
+		done:
 			out = append(out, token{kind: tID, text: src[i:j]})
 			i = j
 		default:
@@ -568,3 +578,5 @@ func str1(name string, f func(string) domain.Value) func([]domain.Value) (domain
 		return f(s), nil
 	}
 }
+
+func isIdentStart(c byte) bool { return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }

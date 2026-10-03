@@ -28,3 +28,12 @@ func (l *StringList) UnmarshalYAML(n *yaml.Node) error {
 	}
 	return nil
 }
+
+// MarshalYAML writes a single name as a plain string, so a v1 schema's canonical form (and
+// its hash) is unchanged by StringList.
+func (l StringList) MarshalYAML() (any, error) {
+	if len(l) == 1 {
+		return l[0], nil
+	}
+	return []string(l), nil
+}

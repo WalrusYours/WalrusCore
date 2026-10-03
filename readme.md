@@ -18,3 +18,9 @@ apply. Adopting WALRUS is a push of that file, with no code change and no databa
 
 - [What a schema is and why](docs/schema/README.md)
 - [Examples, every key explained and the upload pipeline](docs/schema/schema-examples/README.md)
+
+## License
+
+The WALRUS engine is licensed under the [GNU Affero General Public License v3.0](LICENSE)
+(AGPL-3.0). Self-hosting is free; if you run a modified version as a network service, you
+must offer its source to your users under the same licence.

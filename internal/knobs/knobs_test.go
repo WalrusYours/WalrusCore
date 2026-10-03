@@ -232,3 +232,47 @@ func BenchmarkResolve(b *testing.B) {
 		})
 	}
 }
+
+// Schema v2: a knob starts at its declared default, not the middle of its range, and the new
+// targets (recommender values, cross-type history, signals.<s>.weight) resolve like any other.
+func TestKnobDefaultsAndV2Targets(t *testing.T) {
+	c := compile(t, "spotify.yml")
+	r, err := Resolve(c, Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := meta(t, c, r, "recommenders.playlist_add.blend_user"); !near(got, 0.15) {
+		t.Errorf("blend_user = %v, want 0.15 (toggle defaults to on)", got)
+	}
+	if got := meta(t, c, r, "recommenders.playlist_add.seed_aggregate"); !near(got, 0) {
+		t.Errorf("seed_aggregate = %v, want 0 (fit the whole playlist)", got)
+	}
+	if got := weight(t, c, r, "sounds_like"); !near(got, 0.35*(1-0.3)) {
+		t.Errorf("sounds_like = %v, want %v (vibe_vs_branch_out defaults to 0.3)", got, 0.35*0.7)
+	}
+
+	// a saved value still beats the declared default
+	r, _ = Resolve(c, Input{Saved: map[string]float64{"mix_in_my_taste": 0}})
+	if got := meta(t, c, r, "recommenders.playlist_add.blend_user"); got != 0 {
+		t.Errorf("saved toggle off: blend_user = %v, want 0", got)
+	}
+
+	shelf := compile(t, "shelf.yml")
+	r, _ = Resolve(shelf, Input{})
+	if got := meta(t, shelf, r, "signals.films_like_yours.from.book"); !near(got, 1) {
+		t.Errorf("from.book = %v, want 1", got)
+	}
+	if got := meta(t, shelf, r, "recommenders.home.mix.film"); !near(got, 0.5) {
+		t.Errorf("mix.film = %v, want 0.5", got)
+	}
+	if got := meta(t, shelf, r, "attribute.book.pages.target"); !near(got, 500) {
+		t.Errorf("pages target = %v, want 500 (lerp(100, 900, 0.5))", got)
+	}
+
+	// a choice knob resolves through its option value
+	shop := compile(t, "shop.yml")
+	r, _ = Resolve(shop, Input{Overrides: map[string]float64{"trend_strength": 1}})
+	if got := weight(t, shop, r, "trending"); !near(got, 0.4) {
+		t.Errorf("trending = %v, want 0.4", got)
+	}
+}
