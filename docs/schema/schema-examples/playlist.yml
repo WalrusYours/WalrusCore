@@ -1,0 +1,100 @@
+# "You might also add": recommend songs for a playlist. The smallest schema that does it, in the
+# order you would write it. (spotify.yml has the same recommender inside a bigger schema.)
+# Reference for every key: .claude/SCHEMA-V2.md.
+version: 1
+
+# 1. WHAT EXISTS. A user, and the thing being recommended. Give a song the attributes you can
+#    compare songs by: genres, and audio features if your own analysis produces them.
+entities:
+  user:
+    key: id
+    attributes:
+      country: { type: categorical }
+  track:
+    key: id
+    attributes:
+      artist_id: { type: categorical }
+      genres:    { type: set, of: string }
+      energy:    { type: float, range: [0, 1] }     # 0 calm .. 1 intense
+      valence:   { type: float, range: [0, 1] }     # 0 sad .. 1 happy
+
+# 2. WHAT USERS DO. The one that matters here is adding a song to a playlist. It carries the
+#    playlist's id, so WALRUS can see which songs end up in the same playlists.
+interactions:
+  play:            { weight: 1.0,  half_life: 14d }
+  skip:            { weight: -1.5, half_life: 14d }
+  add_to_playlist: { weight: 4.0,  half_life: 90d, fields: { playlist_id: { type: string } } }
+
+# 2b. WHAT THE HOST MAY SEND WITH A REQUEST besides the songs: here, the words of the playlist's
+#     title (used only for an empty playlist, step 8).
+context:
+  title_words: { type: set, of: string, optional: true }
+
+# 3. WHEN TWO SONGS ARE SIMILAR. Each term gets an id so signals and knobs can point at it.
+similarity:
+  track:
+    - { id: audio,  on: [energy, valence], metric: cosine,  weight: 0.5 }
+    - { id: genres, on: genres,            metric: jaccard, weight: 0.4 }
+    - { id: artist, on: artist_id,         metric: equals,  weight: 0.1 }
+
+# 4. WHAT A SUGGESTION IS SCORED ON. Each signal is one reason; the weight is how much it counts.
+signals:
+  co_listed:   { type: co_occurrence, of: [add_to_playlist], group_by: playlist_id, measure: lift, min_support: 3, default: 0.4,
+                 explain: "Often added to playlists with {seed_items}" }
+  sounds_like: { type: item_neighbors, terms: [audio], default: 0.25 }
+  genre_fit:   { type: item_neighbors, terms: [genres], default: 0.2 }
+  energy_fit:  { type: attribute_target, on: energy, target: seed.mean, default: 0.1 }   # near the playlist's average energy
+  popularity:  { type: global_count, window: 30d, of: [play], default: 0.05 }
+  exploration: { type: low_exposure, default: 0.05 }
+  title_match: { type: context_match, on: genres, against: $context.title_words, default: 0.6 }   # step 8
+
+# 5. WHAT MUST NEVER BE SUGGESTED, and a rule for how the list is shaped.
+constraints:
+  - { id: not_in_seed, exclude: { in_seed: true } }          # a song already in the playlist
+rules:
+  - { id: one_per_artist, quota: { attribute: artist_id, max: 1, per: 10 } }
+
+# 6. WHAT THE LISTENER CAN TUNE. A knob moves signal weights between two ends.
+knobs:
+  - id: vibe_vs_branch_out
+    label: "Stick to the vibe  <->  Branch out"
+    range: [0, 1]
+    default: 0.3
+    scope: [playlist_add]
+    maps: { sounds_like: "0.4 * (1 - x)", exploration: "0.3 * x" }
+  - id: deep_cuts_vs_hits
+    label: "Deep cuts  <->  Hits"
+    range: [0, 1]
+    default: 0.3
+    scope: [playlist_add]
+    maps: { popularity: "0.2 * x" }
+
+# 7. THE RECOMMENDER ITSELF: a named endpoint. `seed: items` means "relative to the songs the
+#    host sends" (the playlist), not to the user's history.
+recommenders:
+  playlist_add:
+    label: You might also add
+    for: [track]
+    seed: items
+    seed_aggregate: mean                  # fit the whole playlist; max would fit any one song
+    candidates:
+      - { source: co_occurrence, signal: co_listed, cap: 200 }
+      - { source: item_neighbors, cap: 200 }
+    signals: [co_listed, sounds_like, genre_fit, energy_fit, popularity, exploration]
+    weights:
+      energy_fit: "0.1 * min(seed.size, 5) / 5"     # one song says little about a playlist's centre
+    constraints: [not_in_seed]
+    rules: [one_per_artist]
+    knobs: [vibe_vs_branch_out, deep_cuts_vs_hits]
+    limit: { default: 20, max: 50 }
+    fallback:
+      - { when: "seed.size == 0", use: from_title }
+
+  # 8. OPTIONAL: an empty playlist has no songs to go on, only its title. The host sends the
+  #    title's words as request context, and this recommender matches them against genres.
+  from_title:
+    for: [track]
+    seed: user
+    signals: [title_match, popularity]
+
+recommendable: track

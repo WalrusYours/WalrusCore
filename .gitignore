@@ -1,0 +1,5 @@
+# build output
+*.exe
+/bin/
+/walrus
+/walrusctl

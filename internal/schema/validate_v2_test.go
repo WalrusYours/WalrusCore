@@ -257,3 +257,21 @@ func TestV2ParseErrors(t *testing.T) {
 		})
 	}
 }
+
+// playlist.yml is the minimal "you might also add" schema, the one people copy first, so the
+// mistakes a newcomer is most likely to make must each be reported by name.
+func TestV2PlaylistRules(t *testing.T) {
+	runV2Cases(t, "playlist.yml", []v2Case{
+		{"the playlist id field is missing", "fields: { playlist_id: { type: string } }", "fields: {}", "signals.co_listed.group_by", "no field"},
+		{"co-listing counts a negative interaction", "of: [add_to_playlist], group_by", "of: [skip], group_by", "signals.co_listed.of[0]", "only positive"},
+		{"similarity term id misspelt", "terms: [audio]", "terms: [audo]", "signals.sounds_like.terms", "not a similarity term"},
+		{"target without a range", "energy:    { type: float, range: [0, 1] }", "energy:    { type: float }", "signals.energy_fit.on", "range"},
+		{"playlist target with a user seed", "    seed: items\n", "    seed: user\n", "recommenders.playlist_add.signals", "items or session seed"},
+		{"fallback to a recommender that does not exist", "use: from_title", "use: from_titel", "recommenders.playlist_add.fallback[0].use", "not a declared recommender"},
+		{"title words not declared", "title_words: { type: set, of: string, optional: true }", "words: { type: set, of: string, optional: true }", "signals.title_match.against", "not a declared context field"},
+		{"seed size used in a user-seeded recommender", "    signals: [title_match, popularity]", "    signals: [title_match, popularity]\n    weights: { popularity: \"0.1 * seed.size\" }", "recommenders.from_title.weights.popularity", "cannot be used here"},
+		{"knob maps to a signal that does not exist", "maps: { popularity: \"0.2 * x\" }", "maps: { popularty: \"0.2 * x\" }", "knobs[1].maps.popularty", "neither a declared signal"},
+		{"knob scoped to a missing recommender", "scope: [playlist_add]\n    maps: { sounds_like", "scope: [playlist_adds]\n    maps: { sounds_like", "knobs[0].scope", "not a declared recommender"},
+		{"quota per below max", "max: 1, per: 10", "max: 3, per: 2", "rules[0].quota", "per ≥ max"},
+	})
+}

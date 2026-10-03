@@ -234,15 +234,21 @@ decides who may push.
 
 ## Examples
 
-Six complete `schema.yml` files, one per kind of platform. Copy the closest one, rename the
+Nine complete `schema.yml` files, one per kind of platform. Copy the closest one, rename the
 entities and attributes to match your data, and push it. Each file is checked by the
-server's test suite, so they stay valid as the schema language evolves.
+server's test suite, so they stay valid as the schema language evolves. The first six use
+only the v1 sections; `shop.yml`, `shelf.yml` and the playlist part of `spotify.yml` use the
+schema v2 sections (recommenders, context, rules, metrics, experiments, feedback, recurrence),
+whose full reference is `.claude/SCHEMA-V2.md` in the thesis workspace.
 
 | Example | Platform | What it shows |
 |---------|----------|---------------|
 | [`feed.yml`](feed.yml) | Social feed (the demo app) | The smallest useful schema: views, likes, comments, three knobs |
 | [`marketplace.yml`](marketplace.yml) | Second-hand marketplace | `$user.` references, a proximity signal, a blocked-sellers constraint, price similarity |
-| [`spotify.yml`](spotify.yml) | Music streaming | Audio-feature similarity, negative interactions (skip), a time-window constraint (`within: 2h`) |
+| [`spotify.yml`](spotify.yml) | Music streaming | Audio-feature similarity, negative interactions (skip), a time-window constraint (`within: 2h`); v2: "you might also add" for a playlist (`seed: items`, co-playlisting, the playlist's centre as a target) |
+| [`playlist.yml`](playlist.yml) | "You might also add" for a playlist | The smallest schema for a recommender with a seed of items, written step by step: playlist co-listing, similarity terms, a target near the playlist's average energy, a one-per-artist rule, two knobs, and an empty-playlist fallback by title |
+| [`shop.yml`](shop.yml) | Marketplace, v2 | After a purchase: fewer substitutes, what goes with it, the same kind again when due; "not interested" with reasons; sponsored slots and seller caps; metrics, an A/B test, a holdout, the non-profiled option |
+| [`shelf.yml`](shelf.yml) | Books and films, v2 | Two recommendable types, taste across them (`from`, `similarity.cross`), a mixed list, up next, a watch party, people you may know, interleaving |
 | [`news.yml`](news.yml) | News reader | `computed` attributes (reading time) and `locked` values; a knob that widens topics |
 | [`jobs.yml`](jobs.yml) | Job board | A computed `skill_count`, `apply` and `hide` interactions that exclude |
 | [`courses.yml`](courses.yml) | Online learning | Excluding completed courses and recently dropped ones |
