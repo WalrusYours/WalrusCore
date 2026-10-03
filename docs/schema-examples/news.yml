@@ -1,0 +1,80 @@
+# News reader. Shows the "healthy use" angle: a knob that widens topics and sources.
+version: 1
+
+entities:
+  user:
+    key: id
+    attributes:
+      language:      { type: categorical }
+      muted_sources: { type: set, of: string }
+  source:
+    key: id
+    attributes:
+      country:     { type: categorical }
+      reliability: { type: float, range: [0, 1] }
+  article:
+    key: id
+    attributes:
+      source_id:       { type: ref, entity: source }
+      topic:           { type: categorical }
+      tags:            { type: set, of: string }
+      language:        { type: categorical }
+      published_at:    { type: timestamp }
+      status:          { type: categorical }
+      title:           { type: string }
+      body:            { type: string }
+      text_embedding:  { type: vector, dim: 256, optional: true }
+      title_length:    { type: int,   computed: "len(title)" }
+      reading_minutes: { type: float, computed: "max(1, words(body) / 200)" }
+      length_class:    { type: categorical, computed: "if(reading_minutes < 3, 'short', if(reading_minutes < 8, 'medium', 'long'))" }
+
+interactions:
+  open:          { weight: 1.0, value: seconds, transform: log1p, half_life: 2d }
+  read_complete: { weight: 3.0, half_life: 14d }
+  save:          { weight: 4.0, half_life: 30d }
+  share:         { weight: 4.0, half_life: 30d }
+  hide:          { weight: -5.0, half_life: 90d }
+
+similarity:
+  article:
+    - { on: topic,          metric: equals,  weight: 0.30 }
+    - { on: tags,           metric: jaccard, weight: 0.30 }
+    - { on: text_embedding, metric: cosine,  weight: 0.40 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  content:       { type: item_neighbors,   default: 0.5 }
+  collaborative: { type: user_neighbors,   default: 0.3 }
+  popularity:    { type: global_count,     default: 0.2, window: 1d }
+  recency:       { type: age_decay,        default: 0.5, on: published_at, half_life: 12h }
+  exploration:   { type: low_exposure,     default: 0.1 }
+  topic_spread:  { type: diversity_rerank, on: topic, default: 0.2 }
+  source_spread: { type: diversity_rerank, on: source_id, default: 0.2 }
+
+knobs:
+  - id: taste_vs_crowd
+    label: "What I read  <->  What everyone reads"
+    range: [0, 1]
+    maps: { content: "1 - x", collaborative: "0.2", popularity: "x" }
+  - id: freshness
+    label: "Latest first  <->  Best of the week"
+    range: [0, 1]
+    maps: { recency: "1 - 0.8 * x", popularity: "0.1 + 0.4 * x" }
+  - id: breadth
+    label: "Stay in my topics  <->  Widen my view"
+    range: [0, 1]
+    maps: { exploration: "x", topic_spread: "0.2 + 0.7 * x", source_spread: "0.2 + 0.6 * x" }
+
+presets:
+  default:       { taste_vs_crowd: 0.4, freshness: 0.2, breadth: 0.3 }
+  morning_brief: { freshness: 0.0, breadth: 0.4 }
+  widen_my_view: { breadth: 0.95, taste_vs_crowd: 0.7 }
+
+constraints:
+  - require: { attribute: status, equals: published }
+  - require: { attribute: language, equals: "$user.language" }
+  - exclude: { attribute: source_id, in: "$user.muted_sources" }
+  - exclude: { interacted: [hide] }
+
+recommendable: article

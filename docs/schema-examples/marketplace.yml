@@ -1,0 +1,84 @@
+# Loop: a second-hand marketplace (the running example in .claude/ADAPT.md).
+version: 1
+
+entities:
+  user:
+    key: id
+    attributes:
+      city:            { type: categorical }
+      max_budget:      { type: float, optional: true }
+      blocked_sellers: { type: set, of: string }
+  seller:
+    key: id
+    attributes:
+      rating: { type: float, range: [0, 5] }
+  listing:
+    key: id
+    attributes:
+      seller_id:   { type: ref, entity: seller }
+      category:    { type: categorical }
+      brand:       { type: categorical, optional: true }
+      condition:   { type: categorical }
+      price:       { type: float }
+      city:        { type: categorical }
+      tags:        { type: set, of: string }
+      status:      { type: categorical }
+      created_at:  { type: timestamp }
+      text_embedding: { type: vector, dim: 384, optional: true }
+
+interactions:
+  view:      { weight: 1.0,  value: seconds, transform: log1p, half_life: 3d }
+  favourite: { weight: 4.0,  half_life: 30d }
+  message:   { weight: 5.0,  half_life: 30d }
+  purchase:  { weight: 8.0,  half_life: 180d }
+  hide:      { weight: -5.0, half_life: 90d }
+
+similarity:
+  listing:
+    - { on: category,       metric: equals,    weight: 0.25 }
+    - { on: tags,           metric: jaccard,   weight: 0.25 }
+    - { on: text_embedding, metric: cosine,    weight: 0.35 }
+    - { on: price,          metric: log_ratio, weight: 0.15 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  content:       { type: item_neighbors, default: 0.5 }
+  collaborative: { type: user_neighbors, default: 0.5 }
+  popularity:    { type: global_count,   default: 0.1, window: 7d }
+  recency:       { type: age_decay,      default: 0.3, on: created_at, half_life: 5d }
+  proximity:     { type: attribute_match, on: city, against: "$user.city", default: 0.4 }
+  exploration:   { type: low_exposure,   default: 0.1 }
+  seller_spread: { type: diversity_rerank, on: seller_id, default: 0.3 }
+
+knobs:
+  - id: taste_vs_crowd
+    label: "My taste  <->  What similar buyers like"
+    range: [0, 1]
+    maps: { content: "1 - x", collaborative: "x" }
+  - id: horizon
+    label: "This week  <->  Long-term interests"
+    range: [0, 1]
+    maps: { interactions.half_life_scale: "lerp(0.2, 4, x)" }
+  - id: explore
+    label: "Safe picks  <->  Surprise me"
+    range: [0, 1]
+    maps: { exploration: "x", seller_spread: "0.3 + 0.5 * x" }
+  - id: distance
+    label: "Near me  <->  Anywhere"
+    range: [0, 1]
+    maps: { proximity: "1 - x" }
+
+presets:
+  default:      { taste_vs_crowd: 0.5, horizon: 0.5, explore: 0.2, distance: 0.3 }
+  bargain_hunt: { explore: 0.8, distance: 0.9 }
+  local_only:   { distance: 0.0 }
+
+constraints:
+  - require: { attribute: status, equals: active }
+  - exclude: { attribute: seller_id, in: "$user.blocked_sellers" }
+  - exclude: { interacted: [report] }
+  - exclude: { interacted: [purchase] }
+  - exclude: { attribute: price, gt: "$user.max_budget * 1.2", when: "$user.max_budget != null" }
+
+recommendable: listing

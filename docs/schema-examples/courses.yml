@@ -1,0 +1,78 @@
+# Online learning platform.
+version: 1
+
+entities:
+  user:
+    key: id
+    attributes:
+      level:        { type: categorical }
+      goals:        { type: set, of: string }
+      language:     { type: categorical }
+      weekly_hours: { type: float, optional: true }
+  instructor:
+    key: id
+    attributes:
+      rating: { type: float, range: [0, 5] }
+  course:
+    key: id
+    attributes:
+      instructor_id:  { type: ref, entity: instructor }
+      topic:          { type: categorical }
+      skills:         { type: set, of: string }
+      level:          { type: categorical }
+      language:       { type: categorical }
+      duration_hours: { type: float }
+      published_at:   { type: timestamp }
+      status:         { type: categorical }
+
+interactions:
+  view:     { weight: 1.0, value: seconds, transform: log1p, half_life: 14d }
+  bookmark: { weight: 3.0, half_life: 60d }
+  enroll:   { weight: 5.0, half_life: 180d }
+  complete: { weight: 8.0, half_life: 365d }
+  drop:     { weight: -3.0, half_life: 90d }
+
+similarity:
+  course:
+    - { on: topic,          metric: equals,    weight: 0.30 }
+    - { on: skills,         metric: jaccard,   weight: 0.40 }
+    - { on: level,          metric: equals,    weight: 0.15 }
+    - { on: duration_hours, metric: log_ratio, weight: 0.15 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  content:           { type: item_neighbors,   default: 0.6 }
+  collaborative:     { type: user_neighbors,   default: 0.3 }
+  popularity:        { type: global_count,     default: 0.2, window: 30d }
+  level_match:       { type: attribute_match,  default: 0.5, on: level, against: "$user.level" }
+  recency:           { type: age_decay,        default: 0.1, on: published_at, half_life: 90d }
+  exploration:       { type: low_exposure,     default: 0.1 }
+  instructor_spread: { type: diversity_rerank, on: instructor_id, default: 0.2 }
+
+knobs:
+  - id: taste_vs_crowd
+    label: "My interests  <->  What learners like me take"
+    range: [0, 1]
+    maps: { content: "1 - x", collaborative: "x" }
+  - id: level
+    label: "Review the basics  <->  Challenge me"
+    range: [0, 1]
+    maps: { level_match: "1 - x", exploration: "0.1 + 0.3 * x" }
+  - id: variety
+    label: "Stay on topic  <->  Try something new"
+    range: [0, 1]
+    maps: { exploration: "x", instructor_spread: "0.2 + 0.5 * x" }
+
+presets:
+  default:  { taste_vs_crowd: 0.4, level: 0.3, variety: 0.2 }
+  brush_up: { level: 0.0, variety: 0.1 }
+  deep_dive: { taste_vs_crowd: 0.1, level: 0.9, variety: 0.0 }
+
+constraints:
+  - require: { attribute: status, equals: published }
+  - require: { attribute: language, equals: "$user.language" }
+  - exclude: { interacted: [complete] }
+  - exclude: { interacted: [drop], within: 90d }
+
+recommendable: course

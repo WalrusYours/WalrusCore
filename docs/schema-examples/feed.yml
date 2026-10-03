@@ -1,0 +1,62 @@
+# WALRUS schema: social feed demo
+version: 1
+
+entities:
+  user:
+    key: id
+    attributes:
+      interests: { type: set, of: string }
+  post:
+    key: id
+    attributes:
+      author_id:  { type: ref, entity: user }
+      topic:      { type: categorical }
+      tags:       { type: set, of: string }
+      created_at: { type: timestamp }
+      status:     { type: categorical }
+
+interactions:
+  view:    { weight: 1.0,  value: seconds, transform: log1p, half_life: 3d }
+  like:    { weight: 4.0,  half_life: 30d }
+  comment: { weight: 5.0,  half_life: 30d }
+  dislike: { weight: -5.0, half_life: 90d }
+
+similarity:
+  post:
+    - { on: topic, metric: equals,  weight: 0.5 }
+    - { on: tags,  metric: jaccard, weight: 0.5 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  content:       { type: item_neighbors,   default: 0.5 }
+  collaborative: { type: user_neighbors,   default: 0.5 }
+  popularity:    { type: global_count,     default: 0.1, window: 7d }
+  recency:       { type: age_decay,        default: 0.3, on: created_at, half_life: 2d }
+  exploration:   { type: low_exposure,     default: 0.1 }
+  author_spread: { type: diversity_rerank, default: 0.3, on: author_id }
+
+knobs:
+  - id: taste_vs_crowd
+    label: "My taste  <->  What similar people like"
+    range: [0, 1]
+    maps: { content: "1 - x", collaborative: "x" }
+  - id: horizon
+    label: "This week  <->  Long-term interests"
+    range: [0, 1]
+    maps: { interactions.half_life_scale: "lerp(0.2, 4, x)" }
+  - id: explore
+    label: "Safe picks  <->  Surprise me"
+    range: [0, 1]
+    maps: { exploration: "x", author_spread: "0.3 + 0.5 * x" }
+
+presets:
+  default:  { taste_vs_crowd: 0.5, horizon: 0.5, explore: 0.2 }
+  discover: { explore: 0.9, taste_vs_crowd: 0.8 }
+  focus:    { explore: 0.0, horizon: 0.2 }
+
+constraints:
+  - require: { attribute: status, equals: active }
+  - exclude: { interacted: [dislike] }
+
+recommendable: post

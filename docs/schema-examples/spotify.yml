@@ -1,0 +1,95 @@
+# Music streaming. Adapted from ideas/examples/spotify.schema.yml; presets now set knobs only.
+version: 1
+
+entities:
+  user:
+    key: id
+    attributes:
+      country:          { type: categorical }
+      languages:        { type: set, of: string }
+      explicit_allowed: { type: bool }
+
+  artist:
+    key: id
+    attributes:
+      genres: { type: set, of: string }
+
+  track:
+    key: id
+    attributes:
+      artist_id:    { type: ref, entity: artist }
+      album_id:     { type: string }
+      genres:       { type: set, of: string }
+      language:     { type: categorical }
+      explicit:     { type: bool }
+      release_date: { type: timestamp }
+      duration_ms:  { type: int }
+      available_in: { type: set, of: string }
+      energy:       { type: float, range: [0, 1] }
+      valence:      { type: float, range: [0, 1] }
+      danceability: { type: float, range: [0, 1] }
+      acousticness: { type: float, range: [0, 1] }
+      tempo:        { type: float }
+      audio_embedding: { type: vector, dim: 512, optional: true }
+
+interactions:
+  play:            { weight: 1.0,  value: fraction_listened, transform: identity, half_life: 14d }
+  complete:        { weight: 2.0,  half_life: 30d }
+  skip:            { weight: -1.5, value: seconds_before_skip, transform: "1 - min(v, 30) / 30", half_life: 14d }
+  repeat:          { weight: 2.5,  half_life: 7d }
+  save:            { weight: 4.0,  half_life: 90d }
+  add_to_playlist: { weight: 4.0,  half_life: 90d }
+  search_play:     { weight: 3.0,  half_life: 7d }
+  share:           { weight: 5.0,  half_life: 60d }
+  follow_artist:   { weight: 4.0,  target: artist, half_life: 180d }
+
+similarity:
+  track:
+    - { on: [energy, valence, danceability, acousticness], metric: cosine, weight: 0.35 }
+    - { on: genres,          metric: jaccard, weight: 0.25 }
+    - { on: audio_embedding, metric: cosine,  weight: 0.30 }
+    - { on: artist_id,       metric: equals,  weight: 0.10 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  content:       { type: item_neighbors,   default: 0.5 }
+  collaborative: { type: user_neighbors,   default: 0.5 }
+  familiarity:   { type: own_history,      default: 0.3 }
+  popularity:    { type: global_count,     default: 0.1, window: 30d }
+  recency:       { type: age_decay,        default: 0.2, on: release_date, half_life: 21d }
+  exploration:   { type: low_exposure,     default: 0.1 }
+  artist_spread: { type: diversity_rerank, on: artist_id, default: 0.3 }
+
+knobs:
+  - id: taste_vs_crowd
+    label: "My sound  <->  What people like me play"
+    range: [0, 1]
+    maps: { content: "1 - x", collaborative: "x" }
+  - id: horizon
+    label: "This week's obsession  <->  All-time taste"
+    range: [0, 1]
+    maps: { interactions.half_life_scale: "lerp(0.15, 4, x)" }
+  - id: familiar_vs_new
+    label: "On repeat  <->  Never heard"
+    range: [0, 1]
+    maps: { familiarity: "1 - x", exploration: "x", recency: "0.5 * x" }
+  - id: energy
+    label: "Calm  <->  Energetic"
+    range: [0, 1]
+    maps: { constraint.energy_center: "x" }
+
+presets:
+  default:         { taste_vs_crowd: 0.5, horizon: 0.5, familiar_vs_new: 0.4, energy: 0.5 }
+  discover_weekly: { taste_vs_crowd: 0.7, horizon: 0.6, familiar_vs_new: 0.9 }
+  on_repeat:       { taste_vs_crowd: 0.1, horizon: 0.1, familiar_vs_new: 0.05 }
+  release_radar:   { familiar_vs_new: 0.8, horizon: 0.2 }
+  wind_down:       { familiar_vs_new: 0.2, energy: 0.15 }
+
+constraints:
+  - require: { attribute: available_in, contains: "$user.country" }
+  - exclude: { attribute: explicit, equals: true, when: "$user.explicit_allowed == false" }
+  - exclude: { interacted: [skip], count_gte: 3, within: 30d }
+  - exclude: { interacted: [play], within: 2h }
+
+recommendable: track

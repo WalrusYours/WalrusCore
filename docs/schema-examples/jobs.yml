@@ -1,0 +1,80 @@
+# Job board.
+version: 1
+
+entities:
+  user:
+    key: id
+    attributes:
+      skills:     { type: set, of: string }
+      city:       { type: categorical }
+      seniority:  { type: categorical }
+      remote_ok:  { type: bool }
+      min_salary: { type: float, optional: true }
+  company:
+    key: id
+    attributes:
+      size:   { type: categorical }
+      rating: { type: float, range: [0, 5] }
+  job:
+    key: id
+    attributes:
+      company_id: { type: ref, entity: company }
+      skills:     { type: set, of: string }
+      seniority:  { type: categorical }
+      city:       { type: categorical }
+      remote:     { type: bool }
+      salary_max: { type: float, optional: true }
+      posted_at:  { type: timestamp }
+      status:     { type: categorical }
+      skill_count: { type: int, computed: "len(skills)" }
+
+interactions:
+  view:  { weight: 1.0, value: seconds, transform: log1p, half_life: 7d }
+  save:  { weight: 3.0, half_life: 30d }
+  apply: { weight: 8.0, half_life: 120d }
+  hide:  { weight: -5.0, half_life: 60d }
+
+similarity:
+  job:
+    - { on: skills,     metric: jaccard, weight: 0.55 }
+    - { on: seniority,  metric: equals,  weight: 0.20 }
+    - { on: city,       metric: equals,  weight: 0.15 }
+    - { on: company_id, metric: equals,  weight: 0.10 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  content:        { type: item_neighbors,   default: 0.6 }
+  collaborative:  { type: user_neighbors,   default: 0.3 }
+  recency:        { type: age_decay,        default: 0.4, on: posted_at, half_life: 7d }
+  proximity:      { type: attribute_match,  default: 0.4, on: city, against: "$user.city" }
+  seniority_fit:  { type: attribute_match,  default: 0.4, on: seniority, against: "$user.seniority" }
+  exploration:    { type: low_exposure,     default: 0.1 }
+  company_spread: { type: diversity_rerank, on: company_id, default: 0.3 }
+
+knobs:
+  - id: fit_vs_stretch
+    label: "Close to my skills  <->  Stretch me"
+    range: [0, 1]
+    maps: { content: "1 - 0.5 * x", seniority_fit: "1 - x", exploration: "0.1 + 0.4 * x" }
+  - id: where
+    label: "Near me  <->  Anywhere"
+    range: [0, 1]
+    maps: { proximity: "1 - x" }
+  - id: freshness
+    label: "Newest first  <->  Any age"
+    range: [0, 1]
+    maps: { recency: "1 - 0.9 * x" }
+
+presets:
+  default:       { fit_vs_stretch: 0.2, where: 0.3, freshness: 0.3 }
+  career_switch: { fit_vs_stretch: 0.9, where: 0.6 }
+  local_only:    { where: 0.0 }
+
+constraints:
+  - require: { attribute: status, equals: open }
+  - exclude: { interacted: [apply] }
+  - exclude: { interacted: [hide] }
+  - exclude: { attribute: salary_max, lt: "$user.min_salary", when: "$user.min_salary != null" }
+
+recommendable: job
