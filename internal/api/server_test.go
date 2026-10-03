@@ -28,7 +28,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 func example(t *testing.T, name string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema-examples", name))
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema", "schema-examples", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestOversizedSchemaIsRejected(t *testing.T) {
 }
 
 func TestEveryExampleCanBePushedAsItsOwnTenantSchema(t *testing.T) {
-	files, _ := filepath.Glob(filepath.Join("..", "..", "docs", "schema-examples", "*.yml"))
+	files, _ := filepath.Glob(filepath.Join("..", "..", "docs", "schema", "schema-examples", "*.yml"))
 	for _, f := range files {
 		srv := newTestServer(t)
 		res, body := do(t, srv, "PUT", "/v1/schema", example(t, filepath.Base(f)), bearer)

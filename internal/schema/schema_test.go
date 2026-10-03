@@ -13,7 +13,7 @@ import (
 
 func load(t *testing.T, name string) *Schema {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema-examples", name))
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema", "schema-examples", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ var metaTargets = []string{"interactions.half_life_scale", "constraint.energy_ce
 
 // Every shipped example must parse and be internally consistent.
 func TestExamplesAreConsistent(t *testing.T) {
-	files, err := filepath.Glob(filepath.Join("..", "..", "docs", "schema-examples", "*.yml"))
+	files, err := filepath.Glob(filepath.Join("..", "..", "docs", "schema", "schema-examples", "*.yml"))
 	if err != nil || len(files) < 6 {
 		t.Fatalf("expected at least 6 examples, found %d (%v)", len(files), err)
 	}

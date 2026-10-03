@@ -1,0 +1,323 @@
+# Schema examples
+
+This page explains what a schema is made of, lists six complete examples, and follows a
+schema from upload to going live. For what a schema is and why WALRUS uses one, see the
+[schema overview](../README.md). For the integration steps around it (running WALRUS,
+sending events, reading recommendations) see
+[`.claude/ADAPT.md`](../../../../.claude/ADAPT.md).
+
+## Anatomy of a schema
+
+A schema has up to eight top-level keys. Only the first five are always needed.
+
+```yaml
+version: 1
+entities:     { ... }   # what exists
+interactions: { ... }   # what users do
+similarity:   { ... }   # how things are compared
+signals:      { ... }   # how a score is built
+knobs:        [ ... ]   # what the end user can move
+presets:      { ... }   # named knob positions
+constraints:  [ ... ]   # hard rules
+recommendable: post     # which entity is ranked
+```
+
+The parser rejects unknown keys, so a typo such as `halflife` is an error instead of a
+silently ignored rule. Names you invent (entities, attributes, interactions, signals,
+knob ids, presets) must match `^[a-z][a-z0-9_]*$`, because they end up in database labels
+and property names.
+
+### `version`
+
+An integer of at least 1. It is the version of the schema language, not of your schema;
+WALRUS numbers your pushes itself (see the pipeline below).
+
+### `entities`
+
+Declares what exists and which attributes you will send. Anything not declared is rejected
+at ingest, so mistakes surface early. An entity named `user` is required, because
+constraints and signals refer to `$user`.
+
+```yaml
+entities:
+  post:
+    key: id
+    attributes:
+      topic:      { type: categorical }
+      created_at: { type: timestamp }
+```
+
+| Word | Meaning |
+|------|---------|
+| `key` | The name of the id field, normally `id`. Required. |
+| `attributes` | The fields you will send, each with a `type`. |
+| `type` | One of `categorical` (a small set of labels such as a topic), `string` (free text), `float`, `int`, `bool`, `timestamp`, `set` (a list of strings such as tags), `vector` (an embedding), `ref` (an id of another entity). |
+| `of` | For `set`: the element type, currently `string`. |
+| `entity` | For `ref`: which entity it points to, for example `{ type: ref, entity: user }`. |
+| `dim` | For `vector`: the number of dimensions. |
+| `range` | For `float` and `int`: `[min, max]`, with min below max. |
+| `optional` | The attribute may be missing. Not allowed together with `computed`. |
+| `computed` | An expression over the entity's other attributes, evaluated at ingest, for example `"len(title)"`. The platform never sends a computed attribute. Cycles are rejected. |
+
+### `interactions`
+
+Turns events into weighted edges that fade over time. A `like` is a stronger statement than
+a `view`; a `dislike` is a negative one.
+
+```yaml
+interactions:
+  view: { weight: 1.0, value: seconds, transform: log1p, half_life: 3d }
+  like: { weight: 4.0, half_life: 30d }
+```
+
+| Word | Meaning |
+|------|---------|
+| `weight` | How strongly the event counts. Negative means the user dislikes the target. |
+| `value` | The name of a number your event carries (seconds viewed, fraction listened). Omit it for plain yes/no events. |
+| `transform` | Turns that raw number into a bounded contribution: `identity`, `log1p`, `sqrt`, `clamp`, or an expression in `v`, for example `"1 - min(v, 30) / 30"`. Needs `value`. |
+| `half_life` | How long until an event counts half as much, for example `3d`. Omit it for no decay. |
+| `target` | The entity the event points at, when it is not the recommendable one (for example `follow_artist` targets `artist`). |
+| `locked` | Editing guard for the dashboard (see below). |
+
+Durations use `s`, `m`, `h`, `d`, `w`.
+
+### `similarity`
+
+Defines how two items, or two users, are compared. WALRUS precomputes the nearest
+neighbours from this, and the neighbour signals read them. It is a map from entity name to
+a list of terms; the scores of the terms are combined using their weights.
+
+```yaml
+similarity:
+  post:
+    - { on: topic, metric: equals,  weight: 0.5 }
+    - { on: tags,  metric: jaccard, weight: 0.5 }
+  user:
+    - { via: interactions, metric: cosine }
+```
+
+| Word | Meaning |
+|------|---------|
+| `on` | The attribute (or list of attributes) to compare. |
+| `via: interactions` | Compare users by their interaction history instead of by attributes. Use it for `user`. |
+| `metric` | `equals` (same value), `jaccard` (overlap of two sets), `cosine` (angle between vectors or number lists), `log_ratio` (closeness of two positive numbers such as prices). |
+| `weight` | Share of this term in the combined similarity. Must be above 0 for `on` terms. |
+
+A term uses `on` or `via`, never both.
+
+### `signals`
+
+The named parts of a score. The score of an item for a user is the weighted sum of the
+signals, using the current weights. The `type` picks a built-in behaviour; the other keys
+configure it.
+
+```yaml
+signals:
+  content: { type: item_neighbors, default: 0.5 }
+  recency: { type: age_decay, default: 0.3, on: created_at, half_life: 2d }
+```
+
+| Type | Rewards |
+|------|---------|
+| `item_neighbors` | Items similar to what the user already engaged with. |
+| `user_neighbors` | Items that users with a similar history engaged with. |
+| `own_history` | Items the user has seen before (familiarity), without a hard exclusion. |
+| `global_count` | Popularity over a `window`, for example `window: 7d`. |
+| `age_decay` | Fresh items. Needs `on: <timestamp attribute>` and a `half_life`. |
+| `low_exposure` | Items few people have seen, for discovery. |
+| `attribute_match` | Items whose attribute `on` matches a user value given in `against: "$user.<attribute>"`. |
+| `diversity_rerank` | Spreads results over the values of the attribute `on`, so one author or seller cannot fill the feed. |
+
+`default` is the weight when the user has touched no knob. A new signal type is code
+(register it in the signal registry); using an existing type is only configuration.
+
+### `knobs`
+
+The only controls the end user ever sees. Each knob is a projection onto one or more signal
+weights, so you decide what can be weighted and the user decides how much.
+
+```yaml
+knobs:
+  - id: explore
+    label: "Safe picks  <->  Surprise me"
+    range: [0, 1]
+    maps: { exploration: "x", author_spread: "0.3 + 0.5 * x" }
+```
+
+| Word | Meaning |
+|------|---------|
+| `id` | Stable identifier, unique among knobs. |
+| `label` | Plain-language text shown to users. Required. Write both ends of the slider. |
+| `range` | `[min, max]` of the slider, min below max. |
+| `maps` | Where the knob acts. Each key is a signal id or a meta-parameter; each value is an expression in `x`, the knob position. |
+
+Meta-parameters you can map to: `interactions.half_life_scale` (stretches or shrinks every
+half-life, which gives a "this week versus all-time" knob) and `constraint.energy_center`
+(a soft preference, not a filter).
+
+Expressions use numbers, `x`, `+ - * /`, comparisons, `&& || !`, and the functions `min`,
+`max`, `abs`, `round`, `sqrt`, `log1p`, `clamp(x, lo, hi)`, `lerp(a, b, t)` and
+`if(cond, a, b)`; `len`, `words`, `lower`, `upper` and `contains` are available in computed
+attributes. They are compiled once when the schema loads, so moving a slider never parses
+anything. Division by zero gives 0.
+
+### `presets`
+
+Named knob positions the user can pick in one tap. A preset sets **knobs**, not signals,
+and every value must lie inside the knob's range.
+
+```yaml
+presets:
+  default:  { taste_vs_crowd: 0.5, horizon: 0.5, explore: 0.2 }
+  discover: { explore: 0.9, taste_vs_crowd: 0.8 }
+```
+
+### `constraints`
+
+Hard rules, applied before scoring. They are never weighted, and no knob can override them.
+Each constraint is either `require` or `exclude`, with one condition:
+
+```yaml
+constraints:
+  - require: { attribute: status, equals: active }
+  - exclude: { interacted: [dislike] }
+  - exclude: { interacted: [skip], count_gte: 3, within: 30d }
+  - exclude: { attribute: seller_id, in: "$user.blocked_sellers" }
+```
+
+| Word | Meaning |
+|------|---------|
+| `require` / `exclude` | Keep only items that match, or drop the items that match. Use one per constraint. |
+| `attribute` | Test an attribute of the recommendable entity. Needs exactly one operator below. |
+| `equals`, `in`, `gt`, `lt`, `contains` | The test. The right side may use `$user.<attribute>`. |
+| `interacted` | Test the user's history instead: a list of interaction names. |
+| `count_gte` | Only with `interacted`: at least this many such events. |
+| `within` | Only with `interacted`: only events inside this period, for example `30d`. |
+| `when` | Apply the constraint only if this expression is true, for example `"$user.explicit_allowed == false"`. |
+
+### `recommendable`
+
+The entity that is ranked. It can be left out when exactly one entity besides `user` is
+declared; with more, name it.
+
+### `locked`
+
+Add `locked: true` to an interaction, signal, similarity term or knob to stop it being
+edited by accident in the dashboard. It is an editing guard, not access control: the engine
+stores the flag but does not reject a push that changes a locked value. The API key scope
+decides who may push.
+
+## Examples
+
+Six complete `schema.yml` files, one per kind of platform. Copy the closest one, rename the
+entities and attributes to match your data, and push it. Each file is checked by the
+server's test suite, so they stay valid as the schema language evolves.
+
+| Example | Platform | What it shows |
+|---------|----------|---------------|
+| [`feed.yml`](feed.yml) | Social feed (the demo app) | The smallest useful schema: views, likes, comments, three knobs |
+| [`marketplace.yml`](marketplace.yml) | Second-hand marketplace | `$user.` references, a proximity signal, a blocked-sellers constraint, price similarity |
+| [`spotify.yml`](spotify.yml) | Music streaming | Audio-feature similarity, negative interactions (skip), a time-window constraint (`within: 2h`) |
+| [`news.yml`](news.yml) | News reader | `computed` attributes (reading time) and `locked` values; a knob that widens topics |
+| [`jobs.yml`](jobs.yml) | Job board | A computed `skill_count`, `apply` and `hide` interactions that exclude |
+| [`courses.yml`](courses.yml) | Online learning | Excluding completed courses and recently dropped ones |
+
+## What happens when you upload a schema
+
+The schema is pushed to WALRUS; WALRUS never fetches it from you. Every push, from the
+dashboard, a script or CI, goes through the same steps.
+
+```
+ you write schema.yml
+        |
+        v
+ 1. validate offline        (optional, same checks, no server needed)
+        |
+        v
+ 2. PUT /v1/schema          (admin key; add ?dry_run=true to only check)
+        |
+        v
+ 3. parse                   YAML -> typed schema; unknown keys are an error
+        |
+        v
+ 4. validate                every problem is returned at once, with its path
+        |
+        v
+ 5. diff against current    verdict: none / additive / breaking
+        |
+        +-- dry run ------------------> report only, nothing changes
+        +-- unchanged ----------------> no new version
+        +-- breaking, no confirmation -> 409, nothing changes
+        |
+        v
+ 6. record a version        number, hash, author, time, the YAML itself
+        |
+        v
+ 7. compile and activate    knob expressions and transforms become functions
+        |
+        v
+ live: new requests use the new schema
+```
+
+1. **Validate offline.** The same loader the server uses can check a file with no server and
+   no key (`walrusctl schema validate`, planned; see below). Use it in an editor hook or
+   a pull request.
+2. **Push.** `PUT /v1/schema` with the YAML as the body, authenticated with the admin key.
+   Query options: `dry_run=true` runs every check and returns the diff without changing
+   anything; `confirm_breaking=true` allows a breaking change.
+3. **Parse.** The YAML is decoded into the fixed Go structs that model the schema language.
+   Unknown keys fail here, and so does an empty or malformed document. Bodies over the size
+   limit are refused with 413.
+4. **Validate.** References and types are checked: every `ref` points to a declared
+   entity, `similarity.on` names real attributes, signal types and metrics exist, an
+   `age_decay` signal points at a timestamp, every knob maps to a declared signal or
+   meta-parameter with a valid expression in `x`, presets stay inside knob ranges,
+   constraints name real attributes and interactions, computed attributes have no cycles,
+   and every `$user.x` names an attribute of `user`. All issues come back together as a
+   list of `{path, message}`, with status 400.
+5. **Diff.** The new schema is compared with the active one. Adding things, changing
+   weights, labels, knobs, presets or similarity is **additive** and applies live. Removing
+   an entity, attribute, interaction or signal, or changing an attribute or signal type, is
+   **breaking**: stored data or the neighbour graph must be rebuilt. A breaking change
+   without `confirm_breaking=true` returns 409 with the diff and changes nothing. A schema
+   identical to the active one creates no new version.
+6. **Record.** An accepted schema is stored as the next version: its number, a hash of the
+   canonical form, the author, the time and the YAML. `GET /v1/schema` returns the active
+   one and `GET /v1/schema/history` lists every version, which gives rollback, audit and
+   diffs.
+7. **Compile and activate.** The schema is turned into an in-memory form: knob maps and
+   transforms become functions, attribute names are resolved. The new version replaces the
+   old one atomically, so a request sees either the old or the new schema, never a mix.
+   The compiled form is never stored; it is rebuilt from the YAML.
+
+A push never needs a code change, a rebuild or a restart. The schema only selects and
+configures built-in signal types and similarity metrics.
+
+After a breaking change, re-import the affected entities and events and re-run
+precompute so stored data and similarity match the new schema; the 409 response says what is
+required.
+
+### Getting the file there
+
+- **CI (recommended).** Keep `schema.yml` in your repository. On pull requests run a
+  dry run as a gate; on merge to main push it for real.
+- **Boot sync.** Your backend pushes the schema from the SDK at startup. An unchanged
+  schema creates no new version, so this is safe on every start.
+- **Manual.** `curl` by an admin, for experiments:
+
+```
+curl -X PUT -H "Authorization: Bearer $WALRUS_ADMIN_KEY" \
+     --data-binary @schema.yml "$WALRUS_URL/v1/schema?dry_run=true"
+curl -X PUT -H "Authorization: Bearer $WALRUS_ADMIN_KEY" \
+     --data-binary @schema.yml "$WALRUS_URL/v1/schema"
+```
+
+### Current status
+
+The push endpoint, parsing, validation, diff, versioning and compilation described above
+are implemented and tested, and every example here is pushed by the test suite. Three
+things in this description are still target design rather than code: the `walrusctl schema
+validate | diff | apply` commands (the binary is a scaffold), per-tenant storage of schema
+versions in Neo4j (versions are kept in memory today), and scoped `schema:write` keys (the
+push currently requires the admin key). The schema language itself will not change when
+they land.

@@ -13,7 +13,7 @@ import (
 
 func compile(tb testing.TB, name string) *schema.Compiled {
 	tb.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema-examples", name))
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema", "schema-examples", name))
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestResolveNeverChangesTheCompiledSchema(t *testing.T) {
 }
 
 func TestEveryPresetOfEveryExampleResolves(t *testing.T) {
-	files, _ := filepath.Glob(filepath.Join("..", "..", "docs", "schema-examples", "*.yml"))
+	files, _ := filepath.Glob(filepath.Join("..", "..", "docs", "schema", "schema-examples", "*.yml"))
 	for _, f := range files {
 		name := filepath.Base(f)
 		c := compile(t, name)

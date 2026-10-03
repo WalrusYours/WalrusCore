@@ -9,7 +9,7 @@ import (
 
 func exampleText(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema-examples", name))
+	data, err := os.ReadFile(filepath.Join("..", "..", "docs", "schema", "schema-examples", name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func issuesFor(t *testing.T, text string) []Issue {
 }
 
 func TestShippedExamplesValidate(t *testing.T) {
-	files, _ := filepath.Glob(filepath.Join("..", "..", "docs", "schema-examples", "*.yml"))
+	files, _ := filepath.Glob(filepath.Join("..", "..", "docs", "schema", "schema-examples", "*.yml"))
 	if len(files) < 6 {
 		t.Fatalf("found %d examples", len(files))
 	}
