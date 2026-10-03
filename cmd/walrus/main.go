@@ -1,26 +1,19 @@
-// Command walrus is the WALRUS recommendation server. Scaffold only: serves /health.
+// Command walrus is the WALRUS recommendation server.
 package main
 
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
+
+	"github.com/timurcravtov/walrus/internal/api"
+	"github.com/timurcravtov/walrus/internal/schema"
 )
 
-const version = "0.0.0-scaffold"
-
-// newInstanceID returns a random 128-bit id. Real implementation: generated once on first
-// boot and persisted in the store, so it survives restarts (SERVER.md, instance identity).
-func newInstanceID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-	return hex.EncodeToString(b)
-}
+const version = "0.0.0-dev"
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -29,31 +22,41 @@ func env(key, def string) string {
 	return def
 }
 
+// newInstanceID is random per boot for now; it should be generated once and kept in the
+// store so it survives restarts.
+func newInstanceID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+
 func main() {
-	// First-run admin comes from configuration, never from an open signup page.
-	if os.Getenv("WALRUS_ADMIN_KEY") == "" {
-		slog.Error("WALRUS_ADMIN_KEY is required: it bootstraps the first tenant and keys")
+	listen, err := resolveListen(os.Getenv)
+	if err != nil {
+		slog.Error(err.Error())
 		os.Exit(1)
 	}
-	addr := env("WALRUS_ADDR", ":8080")
-	id := env("WALRUS_INSTANCE_ID", newInstanceID())
-	name := env("WALRUS_INSTANCE_NAME", "walrus")
-
-	health := func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status":        "ok",
-			"version":       version,
-			"instance_id":   id,
-			"instance_name": name,
-		})
+	if listen.DevDefault {
+		slog.Warn("using the development admin key \"key\" on loopback only; set WALRUS_ADMIN_KEY for anything else")
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /health", health)
-	mux.HandleFunc("GET /v1/health", health)
 
-	slog.Info("walrus listening", "addr", addr, "instance_id", id, "instance_name", name)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	cfg := api.Config{
+		AdminKey:     listen.AdminKey,
+		InstanceID:   env("WALRUS_INSTANCE_ID", newInstanceID()),
+		InstanceName: env("WALRUS_INSTANCE_NAME", "walrus"),
+		Version:      version,
+	}
+	srv := &http.Server{
+		Addr:              listen.Addr,
+		Handler:           api.New(cfg, schema.NewService()),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+	}
+	slog.Info("walrus listening", "addr", listen.Addr, "instance_id", cfg.InstanceID, "instance_name", cfg.InstanceName)
+	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)
 	}

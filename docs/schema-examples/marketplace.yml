@@ -32,6 +32,7 @@ interactions:
   message:   { weight: 5.0,  half_life: 30d }
   purchase:  { weight: 8.0,  half_life: 180d }
   hide:      { weight: -5.0, half_life: 90d }
+  report:    { weight: -8.0, half_life: 365d }
 
 similarity:
   listing:

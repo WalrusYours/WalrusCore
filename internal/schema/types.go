@@ -50,6 +50,7 @@ type InteractionSpec struct {
 	Transform Transform `yaml:"transform,omitempty"`
 	HalfLife  Duration  `yaml:"half_life,omitempty"`
 	Target    string    `yaml:"target,omitempty"`
+	Locked    bool      `yaml:"locked,omitempty"`
 }
 
 type Metric string
@@ -70,6 +71,7 @@ type SimilarityTerm struct {
 	Via    string     `yaml:"via,omitempty"`
 	Metric Metric     `yaml:"metric"`
 	Weight float64    `yaml:"weight,omitempty"`
+	Locked bool       `yaml:"locked,omitempty"`
 }
 
 // SignalSpec keeps type-specific keys (window, on, half_life...) in Params, so a new signal
@@ -77,14 +79,16 @@ type SimilarityTerm struct {
 type SignalSpec struct {
 	Type    string         `yaml:"type"`
 	Default float64        `yaml:"default"`
+	Locked  bool           `yaml:"locked,omitempty"`
 	Params  map[string]any `yaml:",inline"`
 }
 
 type KnobSpec struct {
-	ID    string            `yaml:"id"`
-	Label string            `yaml:"label"`
-	Range [2]float64        `yaml:"range"`
-	Maps  map[string]string `yaml:"maps"`
+	ID     string            `yaml:"id"`
+	Label  string            `yaml:"label"`
+	Range  [2]float64        `yaml:"range"`
+	Maps   map[string]string `yaml:"maps"`
+	Locked bool              `yaml:"locked,omitempty"`
 }
 
 // Constraint is a hard filter; exactly one of Require or Exclude is set.

@@ -33,7 +33,7 @@ interactions:
   read_complete: { weight: 3.0, half_life: 14d }
   save:          { weight: 4.0, half_life: 30d }
   share:         { weight: 4.0, half_life: 30d }
-  hide:          { weight: -5.0, half_life: 90d }
+  hide:          { weight: -5.0, half_life: 90d, locked: true }   # editorial rule: hidden stays hidden
 
 similarity:
   article:
@@ -48,7 +48,7 @@ signals:
   collaborative: { type: user_neighbors,   default: 0.3 }
   popularity:    { type: global_count,     default: 0.2, window: 1d }
   recency:       { type: age_decay,        default: 0.5, on: published_at, half_life: 12h }
-  exploration:   { type: low_exposure,     default: 0.1 }
+  exploration:   { type: low_exposure,     default: 0.1, locked: true }   # always keep some discovery
   topic_spread:  { type: diversity_rerank, on: topic, default: 0.2 }
   source_spread: { type: diversity_rerank, on: source_id, default: 0.2 }
 
