@@ -24,6 +24,7 @@ the ranking, and every result comes with the reasons it was shown.
   - [Explain](#explain)
   - [Errors](#errors)
 - [License](#license)
+- [Contributing](#contributing)
 
 ## Schema
 
@@ -149,3 +150,8 @@ WALRUS is licensed under the [Apache License 2.0](LICENSE).
   product displays, such as an "About" page. Mark the files you changed.
 - The licence includes a patent grant from the author, and the software comes with no
   warranty.
+
+## Contributing
+
+Pull requests are not accepted for now, but bug reports and feature requests are welcome as
+issues. See [CONTRIBUTING.md](CONTRIBUTING.md).
