@@ -13,8 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/timurcravtov/walrus/internal/ingest"
 	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
+	"github.com/timurcravtov/walrus/internal/store"
+	"github.com/timurcravtov/walrus/internal/store/memory"
 )
 
 const sessionCookie = "walrus_session"
@@ -35,6 +38,8 @@ type Server struct {
 	cfg      Config
 	schema   *schema.Service
 	rec      *recommend.Service
+	ingest   *ingest.Service
+	store    store.Store
 	sessions *sessions
 	mux      *http.ServeMux
 }
@@ -45,6 +50,7 @@ type Option func(*options)
 type options struct {
 	ranker   recommend.Ranker
 	profiles recommend.Profiles
+	store    store.Store
 }
 
 // WithRanker sets what generates candidates and scores them. Without it the recommend endpoints
@@ -53,6 +59,9 @@ func WithRanker(r recommend.Ranker) Option { return func(o *options) { o.ranker 
 
 // WithProfiles supplies users' saved knob values.
 func WithProfiles(p recommend.Profiles) Option { return func(o *options) { o.profiles = p } }
+
+// WithStore sets where entities are kept. Without it they are kept in memory.
+func WithStore(st store.Store) Option { return func(o *options) { o.store = st } }
 
 func New(cfg Config, svc *schema.Service, opts ...Option) http.Handler {
 	var o options
@@ -68,11 +77,14 @@ func New(cfg Config, svc *schema.Service, opts ...Option) http.Handler {
 	if cfg.SessionTTL == 0 {
 		cfg.SessionTTL = 8 * time.Hour
 	}
+	if o.store == nil {
+		o.store = memory.New()
+	}
 	rec := recommend.NewService(svc, o.ranker)
 	if o.profiles != nil {
 		rec.WithProfiles(o.profiles)
 	}
-	s := &Server{cfg: cfg, schema: svc, rec: rec, sessions: newSessions(cfg.SessionTTL), mux: http.NewServeMux()}
+	s := &Server{cfg: cfg, schema: svc, rec: rec, ingest: ingest.NewService(svc, o.store), store: o.store, sessions: newSessions(cfg.SessionTTL), mux: http.NewServeMux()}
 
 	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("GET /v1/health", s.health)
@@ -85,6 +97,7 @@ func New(cfg Config, svc *schema.Service, opts ...Option) http.Handler {
 	s.mux.HandleFunc("GET /v1/schema", s.requireAdmin(s.getSchema))
 	s.mux.HandleFunc("GET /v1/schema/history", s.requireAdmin(s.schemaHistory))
 
+	s.routeEntities()
 	s.routeRecommend()
 	return s
 }

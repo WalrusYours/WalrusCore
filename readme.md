@@ -22,6 +22,7 @@ the ranking, and every result comes with the reasons it was shown.
 
 - [Schema](#schema)
 - [API](#api)
+  - [Entities](#entities)
   - [Recommend](#recommend)
   - [Explain](#explain)
   - [Errors](#errors)
@@ -49,11 +50,33 @@ only the health endpoints are open. Scoped keys and per-tenant keys are not buil
 | `PUT /v1/schema` | Push the YAML schema as the request body. `?dry_run=true` validates and returns the diff without applying; `?confirm_breaking=true` applies a breaking change. 200 applied, 400 with the paths of every problem, 409 when the change is breaking and needs confirming. |
 | `GET /v1/schema` | The active schema: `yaml`, `version`, `hash`. 404 before the first push. |
 | `GET /v1/schema/history` | Every pushed version. |
+| `POST /v1/entities` | Send up to 1000 entities (items, users...) as JSON. Each is checked against the schema; bad ones are listed in `rejected` and the rest are stored. |
+| `PUT /v1/entities/{type}/{id}` | Create or replace one entity: `{"attributes": {...}}`. 201 when new, 200 when replaced, 400 with the reason when it breaks the schema. |
+| `POST /v1/import` | Load a whole catalogue as JSON Lines, one `{"entity", "id", "attributes"}` per line. Reports the first 100 bad lines by number. |
+| `GET /v1/entities`, `GET /v1/entities/{type}/{id}` | How many entities of each type are stored, and one entity back. |
 | `POST /v1/recommenders/{recommender}/recommend` | Recommend with a recommender the schema declares. |
 | `GET /v1/recommend/{user}` | Shorthand for a schema with no `recommenders`: the implicit `default` recommender for a user. Takes `?limit=`, `?preset=` and `?knobs.<id>=<number>`. |
 | `POST /v1/recommend/{user}` | The same, with a JSON body (for example `exclude`). |
 | `GET /v1/recommendations/{rec_id}/explain/{item}` | Why one item is where it is in one earlier list. |
 | `POST /v1/admin/session`, `GET /v1/admin/session`, `DELETE /v1/admin/session` | Sign in with `{"key": "..."}` and get a short-lived HttpOnly cookie, check it, sign out. Used by the dashboard so the key is never kept in a browser. |
+
+### Entities
+
+Entities are checked against the pushed schema: the type and every attribute must be declared, each
+value must have the declared type (and range), and every attribute that is not `optional` must be
+present. Sending the same `type` and `id` again replaces the entity, so loads can be repeated.
+
+```http
+POST /v1/entities
+
+{ "entities": [
+  { "entity": "track", "id": "back_in_black", "attributes": { "energy": 0.92, "genres": ["rock"], "...": "..." } }
+] }
+```
+
+```json
+{ "accepted": 1, "rejected": [ { "index": 3, "entity": "track", "id": "x", "error": "attribute \"energy\": 1.5 is outside the range [0, 1]" } ] }
+```
 
 ### Recommend
 
@@ -135,9 +158,10 @@ so the breakdown is the one that produced the score and always adds up to it.
 | 404 | `unknown_recommendation`, `unknown_item` | The `rec_id` expired, or the item was not in that list. |
 | 409 | `schema_missing` | Nothing has been pushed yet. |
 
-> **Status.** The request layer above is complete: validation, experiments, knob and weight
-> resolution, fallbacks, `rec_id` and explain. Candidate generation and scoring read from a store
-> that is not built yet, so until then recommend answers with an empty `items` list.
+> **Status.** Entities are stored (in memory, so they are lost on restart). The recommend request
+> layer is complete: validation, experiments, knob and weight resolution, fallbacks, `rec_id` and
+> explain. Interactions and the scorer are not built yet, so recommend answers with an empty `items`
+> list for now.
 
 ## License
 

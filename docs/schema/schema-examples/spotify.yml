@@ -1,4 +1,4 @@
-# Music streaming. Adapted from ideas/examples/spotify.schema.yml; presets now set knobs only.
+# Music streaming: a home feed and "you might also add" for a playlist.
 # Schema v2 parts: a home feed that is exactly the v1 behaviour, and
 # "you might also add" for a playlist (seed: items), which learns from what other people put
 # in the same playlists.
