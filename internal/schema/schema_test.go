@@ -177,7 +177,7 @@ func TestAttrTypeKinds(t *testing.T) {
 	want := map[AttrType]domain.Kind{
 		TypeCategorical: domain.KindString, TypeString: domain.KindString, TypeRef: domain.KindString,
 		TypeFloat: domain.KindFloat, TypeInt: domain.KindFloat, TypeBool: domain.KindBool,
-		TypeTimestamp: domain.KindTime, TypeSet: domain.KindSet, TypeVector: domain.KindVector,
+		TypeTimestamp: domain.KindTime, TypeSet: domain.KindSet, TypeVector: domain.KindVector, TypeGeo: domain.KindVector,
 	}
 	if len(want) != len(AttrTypes) {
 		t.Fatalf("test covers %d types, AttrTypes has %d", len(want), len(AttrTypes))
@@ -213,6 +213,7 @@ func TestCoerce(t *testing.T) {
 		{"timestamp time.Time", AttributeSpec{Type: TypeTimestamp}, ts, domain.Time(ts)},
 		{"set from json", AttributeSpec{Type: TypeSet}, []any{"road", "shimano", "road"}, domain.Set("road", "shimano")},
 		{"vector", vec3, []any{1.0, 2.0, 3.0}, domain.Vec(1, 2, 3)},
+		{"geo", AttributeSpec{Type: TypeGeo}, map[string]any{"lat": 47.5, "lon": 28.25}, domain.Vec(47.5, 28.25)},
 		{"optional nil", AttributeSpec{Type: TypeFloat, Optional: true}, nil, domain.Null()},
 	}
 	for _, c := range good {
@@ -237,6 +238,8 @@ func TestCoerce(t *testing.T) {
 		{"bad timestamp", AttributeSpec{Type: TypeTimestamp}, "yesterday"},
 		{"set with number", AttributeSpec{Type: TypeSet}, []any{"a", 1.0}},
 		{"vector wrong dim", vec3, []any{1.0, 2.0}},
+		{"geo as a list", AttributeSpec{Type: TypeGeo}, []any{47.5, 28.25}},
+		{"geo out of range", AttributeSpec{Type: TypeGeo}, map[string]any{"lat": 95.0, "lon": 0.0}},
 		{"vector bad element", vec3, []any{1.0, "x", 3.0}},
 		{"required nil", AttributeSpec{Type: TypeFloat}, nil},
 		{"unknown type", AttributeSpec{Type: "blob"}, "x"},
@@ -254,7 +257,7 @@ var knownSignalTypes = []string{
 	"item_neighbors", "user_neighbors", "own_history", "global_count",
 	"age_decay", "low_exposure", "attribute_match", "diversity_rerank", "trend",
 	"co_occurrence", "sequence", "mutual_connections", "attribute_target", "attribute_value",
-	"context_match", "provided", "formula", "satiation", "recurrence",
+	"context_match", "provided", "formula", "satiation", "recurrence", "proximity",
 }
 
 var metaTargets = []string{"interactions.half_life_scale", "constraint.energy_center"}

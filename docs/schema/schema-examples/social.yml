@@ -1,0 +1,159 @@
+# A social network. What it shows that feed.yml does not:
+#   - a follow graph: the user keeps the set of handles they follow, and one feed shows only
+#     those, another shows only accounts they do not follow yet;
+#   - "more from this author": a recommender scoped by the seed post's own author;
+#   - accounts to follow: people recommended to people (`for: [user]`), by mutual follows;
+#   - hiding and muting an author.
+version: 1
+
+meta:
+  name: Chatter
+  description: A social network.
+  locales: [en]
+  default_locale: en
+
+entities:
+  user:
+    key: id
+    attributes:
+      handle:          { type: string }                     # the account name others follow
+      following:       { type: set, of: string }            # handles of the accounts they follow
+      interests:       { type: set, of: string, optional: true }
+      language:        { type: categorical }
+      discoverable:    { type: bool }                       # may be suggested to others
+      personalization: { type: bool }
+  post:
+    key: id
+    lifecycle:
+      created: created_at
+    attributes:
+      author_id:  { type: ref, entity: user }
+      topics:     { type: set, of: string }
+      language:   { type: categorical }
+      created_at: { type: timestamp }
+      has_media:  { type: bool }
+
+interactions:
+  impression: { kind: exposure, target: post, retention: 14d }
+  like:       { kind: positive, weight: 1, half_life: 7d, dedupe: per_item }
+  reply:      { kind: positive, weight: 3, half_life: 14d }
+  repost:     { kind: positive, weight: 2.5, half_life: 7d }
+  follow:     { kind: positive, weight: 2, target: user, half_life: 180d, dedupe: per_item }
+  hide:       { kind: negative, weight: -5, half_life: 60d, dedupe: per_item }
+  mute:       { kind: negative, weight: -8, target: user, dedupe: per_item }
+
+similarity:
+  post:
+    - { id: topics,   on: topics,    metric: jaccard, weight: 0.8 }
+    - { id: language, on: language,  metric: equals,  weight: 0.2 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  content:         { type: item_neighbors, for: [post], default: 0.4 }
+  people_like_you: { type: user_neighbors, for: [post], default: 0.4 }
+  fresh:           { type: age_decay, for: [post], half_life: 6h, default: 0.5 }
+  engagement:      { type: global_count, for: [post], window: 24h, of: [like, reply, repost], default: 0.2 }
+  trending:        { type: trend, for: [post], on: created_at, window: 3h, baseline: 7d, against: auto, of: [like, reply, repost], count: people, min: 10, ratio: 2, default: 0.3 }
+  mutuals:         { type: mutual_connections, for: [user], via: follow, default: 0.7 }
+  shared_interest: { type: attribute_match, for: [user], on: interests, against: "$user.interests", default: 0.3 }
+
+constraints:
+  - { id: from_followed,  for: [post], require: { attribute: author_id, in: "$user.following" } }   # author_id holds the author's handle
+  - { id: not_followed,   for: [post], exclude: { attribute: author_id, in: "$user.following" } }
+  - { id: same_author,    for: [post], require: { attribute: author_id, equals: "$seed.author_id" } }
+  - { id: not_in_seed,    exclude: { in_seed: true } }
+  - { id: not_self,       for: [user], exclude: { in_seed: true } }
+  - { id: not_hidden,     for: [post], exclude: { interacted: [hide], count_gte: 1 } }
+  - { id: not_muted,      for: [user], exclude: { interacted: [mute], count_gte: 1 } }
+  - { id: not_following,  for: [user], exclude: { attribute: handle, in: "$user.following" } }
+  - { id: discoverable,   for: [user], require: { attribute: discoverable, equals: true } }
+
+rules:
+  - { id: author_variety, for: [post], quota: { attribute: author_id, max: 2, per: 10 } }
+
+knobs:
+  - id: new_vs_popular
+    label: "Newest first  <->  What is being talked about"
+    group: Your feed
+    range: [0, 1]
+    default: 0.3
+    scope: [following, discover]
+    maps: { fresh: "0.6 * (1 - x)", engagement: "0.4 * x", trending: "0.5 * x" }
+  - id: taste_vs_crowd
+    label: "Topics I like  <->  What people like me read"
+    group: Your feed
+    range: [0, 1]
+    default: 0.5
+    scope: [discover]
+    maps: { content: "0.6 * (1 - x)", people_like_you: "0.6 * x" }
+
+presets:
+  default: { new_vs_popular: 0.3, taste_vs_crowd: 0.5 }
+  latest:  { new_vs_popular: 0 }
+
+recommenders:
+  following:                                   # only people I follow
+    label: Following
+    for: [post]
+    seed: user
+    candidates:
+      - { source: fresh, cap: 300 }
+    signals: [fresh, engagement]
+    constraints: [from_followed, not_hidden]
+    rules: [author_variety]
+    knobs: [new_vs_popular]
+    limit: { default: 40, max: 100 }
+
+  discover:                                    # people I do not follow yet
+    label: Discover
+    for: [post]
+    seed: user
+    candidates:
+      - { source: item_neighbors, cap: 200 }
+      - { source: user_neighbors, cap: 150 }
+      - { source: trend, signal: trending, cap: 50 }
+    signals: [content, people_like_you, fresh, engagement, trending]
+    constraints: [not_followed, not_hidden]
+    rules: [author_variety]
+    knobs: [new_vs_popular, taste_vs_crowd]
+    fallback:
+      - { when: "profile.size == 0", use: popular_posts }
+
+  more_from_author:                            # under a post: the same author's other posts
+    label: More from this author
+    for: [post]
+    seed: item
+    candidates:
+      - { source: fresh, cap: 100 }
+    signals: [fresh, engagement]
+    constraints: [same_author, not_in_seed, not_hidden]
+    limit: { default: 6, max: 20 }
+
+  accounts_to_follow:                          # people recommended to a person
+    label: Who to follow
+    for: [user]
+    seed: user
+    candidates:
+      - { source: mutuals, signal: mutuals, cap: 200 }
+    signals: [mutuals, shared_interest]
+    constraints: [not_self, not_following, not_muted, discoverable]
+    limit: { default: 10, max: 30 }
+
+  popular_posts:                               # not personal: cold start and the non-profiled option
+    label: Popular now
+    for: [post]
+    seed: none
+    signals: [engagement, trending, fresh]
+    constraints: [not_followed]
+
+metrics:
+  engagement_rate: { ratio: [like, impression] }
+  hide_rate:       { ratio: [hide, impression] }
+  follow_rate:     { ratio: [follow, impression] }
+
+privacy:
+  retention: { default: 365d }
+  opt_out: { attribute: personalization, equals: false, use: popular_posts }
+
+recommendable: [post, user]

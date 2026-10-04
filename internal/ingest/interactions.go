@@ -112,7 +112,7 @@ func convertInteraction(sch *schema.Schema, r RawInteraction, now time.Time) (do
 
 // fieldText keeps an event field as text, the form it is stored and grouped by.
 func fieldText(t schema.AttrType, raw any) (string, error) {
-	v, err := value(schema.AttributeSpec{Type: t}, raw)
+	v, err := schema.AttributeSpec{Type: t}.Coerce(raw)
 	if err != nil {
 		return "", err
 	}

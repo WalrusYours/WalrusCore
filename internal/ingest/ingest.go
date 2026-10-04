@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"math"
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/timurcravtov/walrus/internal/apperr"
 	"github.com/timurcravtov/walrus/internal/domain"
@@ -113,105 +111,13 @@ func convert(sch *schema.Schema, r Raw) (domain.Entity, error) {
 			}
 			continue
 		}
-		v, err := value(a, raw)
+		v, err := a.Coerce(raw)
 		if err != nil {
 			return domain.Entity{}, fmt.Errorf("attribute %q: %w", name, err)
 		}
 		attrs[name] = v
 	}
 	return domain.Entity{Type: r.Entity, ID: domain.EntityID(r.ID), Attrs: attrs}, nil
-}
-
-func value(a schema.AttributeSpec, raw any) (domain.Value, error) {
-	switch a.Type {
-	case schema.TypeCategorical, schema.TypeString, schema.TypeRef:
-		s, ok := raw.(string)
-		if !ok {
-			return domain.Value{}, fmt.Errorf("expected a string, got %s", describe(raw))
-		}
-		return domain.Str(s), nil
-
-	case schema.TypeFloat, schema.TypeInt:
-		f, ok := raw.(float64)
-		if !ok || math.IsNaN(f) || math.IsInf(f, 0) {
-			return domain.Value{}, fmt.Errorf("expected a number, got %s", describe(raw))
-		}
-		if a.Type == schema.TypeInt && f != math.Trunc(f) {
-			return domain.Value{}, fmt.Errorf("expected a whole number, got %v", f)
-		}
-		if a.Range != nil && (f < a.Range[0] || f > a.Range[1]) {
-			return domain.Value{}, fmt.Errorf("%v is outside the range [%v, %v]", f, a.Range[0], a.Range[1])
-		}
-		return domain.Num(f), nil
-
-	case schema.TypeBool:
-		b, ok := raw.(bool)
-		if !ok {
-			return domain.Value{}, fmt.Errorf("expected true or false, got %s", describe(raw))
-		}
-		return domain.Bool(b), nil
-
-	case schema.TypeTimestamp:
-		s, ok := raw.(string)
-		if !ok {
-			return domain.Value{}, fmt.Errorf("expected an RFC 3339 timestamp, got %s", describe(raw))
-		}
-		t, err := time.Parse(time.RFC3339, s)
-		if err != nil {
-			return domain.Value{}, fmt.Errorf("%q is not an RFC 3339 timestamp", s)
-		}
-		return domain.Time(t), nil
-
-	case schema.TypeSet:
-		list, ok := raw.([]any)
-		if !ok {
-			return domain.Value{}, fmt.Errorf("expected a list of strings, got %s", describe(raw))
-		}
-		items := make([]string, len(list))
-		for i, x := range list {
-			s, ok := x.(string)
-			if !ok {
-				return domain.Value{}, fmt.Errorf("item %d: expected a string, got %s", i, describe(x))
-			}
-			items[i] = s
-		}
-		return domain.Set(items...), nil
-
-	case schema.TypeVector:
-		list, ok := raw.([]any)
-		if !ok {
-			return domain.Value{}, fmt.Errorf("expected a list of numbers, got %s", describe(raw))
-		}
-		if a.Dim > 0 && len(list) != a.Dim {
-			return domain.Value{}, fmt.Errorf("expected %d numbers, got %d", a.Dim, len(list))
-		}
-		vec := make([]float32, len(list))
-		for i, x := range list {
-			f, ok := x.(float64)
-			if !ok || math.IsNaN(f) || math.IsInf(f, 0) {
-				return domain.Value{}, fmt.Errorf("item %d: expected a number, got %s", i, describe(x))
-			}
-			vec[i] = float32(f)
-		}
-		return domain.Vec(vec...), nil
-	}
-	return domain.Value{}, fmt.Errorf("unsupported attribute type %q", a.Type)
-}
-
-func describe(v any) string {
-	switch v.(type) {
-	case string:
-		return "a string"
-	case float64:
-		return "a number"
-	case bool:
-		return "a boolean"
-	case []any:
-		return "a list"
-	case map[string]any:
-		return "an object"
-	}
-	return fmt.Sprintf("%T", v)
 }
 
 func join(s []string) string { return strings.Join(s, ", ") }

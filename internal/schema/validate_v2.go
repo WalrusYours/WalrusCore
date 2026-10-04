@@ -58,7 +58,7 @@ func (v *validator) text(p string, t Text, required bool) {
 	}
 }
 
-var contextTypes = []AttrType{TypeCategorical, TypeString, TypeInt, TypeFloat, TypeBool, TypeTimestamp, TypeSet}
+var contextTypes = []AttrType{TypeCategorical, TypeString, TypeInt, TypeFloat, TypeBool, TypeTimestamp, TypeSet, TypeGeo}
 
 func (v *validator) context() {
 	for _, name := range sortedKeys(v.s.Context) {
@@ -66,7 +66,7 @@ func (v *validator) context() {
 		p := "context." + name
 		v.ident(p, name)
 		if !slices.Contains(contextTypes, f.Type) {
-			v.add(p+".type", "a context field is categorical, string, int, float, bool, timestamp or set, got %q", f.Type)
+			v.add(p+".type", "a context field is categorical, string, int, float, bool, timestamp, set or geo, got %q", f.Type)
 		}
 		if f.Type == TypeSet && f.Of != "" && f.Of != "string" {
 			v.add(p+".of", `set elements must be "string", got %q`, f.Of)
@@ -372,9 +372,11 @@ var (
 
 func (v *validator) recommenders() {
 	constraintIDs := map[string]bool{}
+	constraintByID := map[string]Constraint{}
 	for _, c := range v.s.Constraints {
 		if c.ID != "" {
 			constraintIDs[c.ID] = true
+			constraintByID[c.ID] = c
 		}
 	}
 	ruleIDs := map[string]Rule{}
@@ -402,6 +404,9 @@ func (v *validator) recommenders() {
 		for _, cid := range r.Constraints {
 			if !constraintIDs[cid] {
 				v.add(p+".constraints", "%q is not the id of a constraint", cid)
+			}
+			if c, ok := constraintByID[cid]; ok && c.usesSeed() && !slices.Contains(itemSeeds, seed) {
+				v.add(p+".constraints", "constraint %s refers to $seed, which needs an item, items or session seed", cid)
 			}
 		}
 		v.recommenderRules(p, r, ruleIDs)

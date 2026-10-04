@@ -90,14 +90,14 @@ func TestEachKindOfBadEntityIsRejectedWithItsReason(t *testing.T) {
 		{"long id", track(strings.Repeat("x", 201), nil), "id must be"},
 		{"unknown attribute", track("x", map[string]any{"mood": "sad"}), `has no attribute "mood"`},
 		{"missing attribute", track("x", map[string]any{"energy": nil}), `missing attribute "energy"`},
-		{"string for a number", track("x", map[string]any{"tempo": "fast"}), `attribute "tempo": expected a number, got a string`},
-		{"fraction for an int", track("x", map[string]any{"duration_ms": 1.5}), "expected a whole number"},
-		{"outside the range", track("x", map[string]any{"energy": 1.5}), "outside the range [0, 1]"},
-		{"bad timestamp", track("x", map[string]any{"release_date": "1980"}), "not an RFC 3339 timestamp"},
-		{"number for a bool", track("x", map[string]any{"explicit": 1.0}), "expected true or false"},
-		{"string for a set", track("x", map[string]any{"genres": "rock"}), "expected a list of strings"},
-		{"number in a set", track("x", map[string]any{"genres": []any{"rock", 3.0}}), "item 1: expected a string"},
-		{"wrong vector size", track("x", map[string]any{"audio_embedding": vec}), "expected 512 numbers, got 3"},
+		{"string for a number", track("x", map[string]any{"tempo": "fast"}), `attribute "tempo": expected number, got string`},
+		{"fraction for an int", track("x", map[string]any{"duration_ms": 1.5}), "expected integer"},
+		{"outside the range", track("x", map[string]any{"energy": 1.5}), "outside range [0, 1]"},
+		{"bad timestamp", track("x", map[string]any{"release_date": "1980"}), "expected RFC 3339 timestamp"},
+		{"number for a bool", track("x", map[string]any{"explicit": 1.0}), "expected bool"},
+		{"string for a set", track("x", map[string]any{"genres": "rock"}), "expected array of strings"},
+		{"number in a set", track("x", map[string]any{"genres": []any{"rock", 3.0}}), "set element 1: expected string"},
+		{"wrong vector size", track("x", map[string]any{"audio_embedding": vec}), "expected vector of length 512, got 3"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			res, err := s.Entities(context.Background(), []Raw{c.raw})
@@ -215,7 +215,7 @@ func TestInteractionsAreCheckedAndStored(t *testing.T) {
 	if res.Accepted != 2 || len(res.Rejected) != 7 {
 		t.Fatalf("%+v", res)
 	}
-	for i, want := range []string{"unknown interaction type", "user must be", "target must be", "not an RFC 3339", `missing field "playlist_id"`, `no field "mood"`, "expected a string"} {
+	for i, want := range []string{"unknown interaction type", "user must be", "target must be", "not an RFC 3339", `missing field "playlist_id"`, `no field "mood"`, "expected string"} {
 		if !strings.Contains(res.Rejected[i].Error, want) {
 			t.Errorf("rejection %d = %q, want %q", i, res.Rejected[i].Error, want)
 		}

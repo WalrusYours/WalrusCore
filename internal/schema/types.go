@@ -263,7 +263,11 @@ type Condition struct {
 	Equals     any      `yaml:"equals,omitempty"`
 	In         string   `yaml:"in,omitempty"`
 	Gt         string   `yaml:"gt,omitempty"`
+	Gte        string   `yaml:"gte,omitempty"`
 	Lt         string   `yaml:"lt,omitempty"`
+	Lte        string   `yaml:"lte,omitempty"`
+	WithinKm   float64  `yaml:"within_km,omitempty"` // the attribute (a geo point) is this near Of
+	Of         string   `yaml:"of,omitempty"`        // the place WithinKm is measured from
 	Interacted []string `yaml:"interacted,omitempty"`
 	Contains   string   `yaml:"contains,omitempty"`
 	CountGTE   int      `yaml:"count_gte,omitempty"`

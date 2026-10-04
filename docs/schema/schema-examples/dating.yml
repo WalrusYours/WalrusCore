@@ -1,0 +1,173 @@
+# A dating app: people recommended to people, where both sides must fit. What it shows:
+#   - two-sided matching (`reciprocal`): a person is ranked by how well they fit you and how well
+#     you fit them. The engine does not score both sides yet, so for now the list is ranked from
+#     your side only; the schema is the contract and does not change when it does;
+#   - mutual preferences as hard filters: who you are interested in, an age range, a distance,
+#     and none of it can be traded away by a slider;
+#   - sensitive attributes (gender, who you are interested in) that are used but never explained;
+#   - "they already liked you", which only the platform knows, sent as scores (`provided`);
+#   - a person is not shown twice in a day, and new members get a share of the list.
+version: 1
+
+meta:
+  name: Spark
+  description: Meet people near you.
+  locales: [en]
+  default_locale: en
+
+entities:
+  user:
+    key: id
+    lifecycle:
+      created: joined_at
+      active: { attribute: status, in: [active] }
+    attributes:
+      age:           { type: int, range: [18, 100] }
+      gender:        { type: categorical, sensitive: true }
+      interested_in: { type: set, of: string, sensitive: true }      # genders they want to meet
+      min_age:       { type: int, range: [18, 100] }
+      max_age:       { type: int, range: [18, 100] }
+      location:      { type: geo }
+      interests:     { type: set, of: string }
+      languages:     { type: set, of: string }
+      looking_for:   { type: categorical }                          # relationship, friends, casual
+      verified:      { type: bool }
+      response_rate: { type: float, range: [0, 1] }
+      last_active:   { type: timestamp }
+      joined_at:     { type: timestamp }
+      status:        { type: categorical }
+      personalization: { type: bool }
+
+interactions:
+  impression:  { kind: exposure, target: user, retention: 30d }
+  like:        { kind: positive, weight: 3, target: user, half_life: 90d, dedupe: per_item }
+  super_like:  { kind: positive, weight: 6, target: user, half_life: 90d, dedupe: per_item }
+  pass:        { kind: negative, weight: -1, target: user, half_life: 60d, dedupe: per_item }
+  match:       { kind: conversion, weight: 8, target: user, half_life: 180d, dedupe: per_item }
+  message:     { kind: positive, weight: 4, target: user, half_life: 30d }
+  block:       { kind: negative, weight: -10, target: user, dedupe: per_item, locked: true }
+  report:      { kind: negative, weight: -10, target: user, dedupe: per_item, locked: true }
+
+context:
+  location:      { type: geo, optional: true }               # where they are now, over the saved one
+  verified_only: { type: bool, optional: true }
+
+similarity:
+  user:
+    - { id: interests, on: interests,   metric: jaccard,   weight: 0.45 }
+    - { id: languages, on: languages,   metric: jaccard,   weight: 0.2 }
+    - { id: goals,     on: looking_for, metric: equals,    weight: 0.2 }
+    - { id: age,       on: age,         metric: closeness, weight: 0.15 }
+    - { via: interactions, metric: cosine }          # people who like the same people
+
+signals:
+  shared_interests: { type: item_neighbors, terms: [interests, languages], default: 0.4 }
+  same_goals:       { type: attribute_match, on: looking_for, against: "$user.looking_for", default: 0.4 }
+  nearby:           { type: proximity, on: location, to: "$user.location", half_distance: 15, default: 0.4 }
+  like_minded:      { type: user_neighbors, of: [like, super_like, match], default: 0.2 }
+  active_lately:    { type: age_decay, on: last_active, half_life: 3d, default: 0.2 }
+  replies:          { type: attribute_value, on: response_rate, default: 0.15 }
+  liked_you:        { type: provided, name: liked_you, default: 0.6 }          # only the platform knows
+  new_here:         { type: age_decay, half_life: 14d, default: 0.1 }
+
+constraints:
+  - { id: not_self,       exclude: { in_seed: true } }
+  - { id: i_want_them,    require: { attribute: gender, in: "$user.interested_in" } }
+  - { id: old_enough,     require: { attribute: age, gte: "$user.min_age" } }
+  - { id: young_enough,   require: { attribute: age, lte: "$user.max_age" } }
+  - { id: close_enough,   require: { attribute: location, within_km: 100, of: "$user.location" } }
+  - { id: not_seen,       exclude: { interacted: [like, super_like, pass], count_gte: 1 } }
+  - { id: not_blocked,    exclude: { interacted: [block, report], count_gte: 1 } }
+  - { id: verified_only,  require: { attribute: verified, equals: true, when: "$context.verified_only == true" } }
+
+rules:
+  - { id: once_a_day,   cap: { exposure: impression, max: 1, within: 1d } }
+  - { id: new_members,  quota: { when: "age < 604800", min_share: 0.15, top: 20 } }
+
+knobs:
+  - id: interests_vs_nearby
+    label: "Shared interests  <->  Closer to me"
+    group: What I look for
+    range: [0, 1]
+    default: 0.5
+    scope: [people]
+    maps: { shared_interests: "0.7 * (1 - x)", nearby: "0.7 * x" }
+  - id: same_goals_only
+    kind: toggle
+    label: Prefer people who want the same
+    group: What I look for
+    default: 1
+    scope: [people]
+    maps: { same_goals: "0.5 * x" }
+  - id: recently_active
+    label: "Any time  <->  Active lately"
+    group: What I look for
+    range: [0, 1]
+    default: 0.5
+    scope: [people]
+    maps: { active_lately: "0.5 * x" }
+
+presets:
+  default: { interests_vs_nearby: 0.5, same_goals_only: 1 }
+  close_by: { interests_vs_nearby: 1 }
+
+recommenders:
+  people:
+    label: People for you
+    for: [user]
+    seed: user
+    candidates:
+      - { source: item_neighbors, cap: 300 }
+      - { source: user_neighbors, cap: 200 }
+      - { source: fresh, cap: 50 }
+      - { source: provided, cap: 50 }                   # the people who already liked you
+    signals: [shared_interests, same_goals, nearby, like_minded, active_lately, replies, liked_you, new_here]
+    constraints: [not_self, i_want_them, old_enough, young_enough, close_enough, not_seen, not_blocked, verified_only]
+    rules: [once_a_day, new_members]
+    knobs: [interests_vs_nearby, same_goals_only, recently_active]
+    reciprocal: { recommender: people_view_of_me, combine: harmonic }
+    limit: { default: 20, max: 50 }
+    fallback:
+      - { when: "profile.size == 0", use: popular_nearby }
+
+  people_view_of_me:                                   # never called by the app: it scores a candidate's
+    label: How they would see you                      # view of you, with the same rules from their side
+    for: [user]
+    seed: user
+    candidates:
+      - { source: item_neighbors, cap: 300 }
+    signals: [shared_interests, same_goals, nearby]
+    constraints: [not_self, i_want_them, old_enough, young_enough, close_enough, not_blocked]
+
+  popular_nearby:                                      # not personal: cold start and the non-profiled option
+    label: Popular near you
+    for: [user]
+    seed: none
+    signals: [nearby, active_lately, replies]
+    constraints: [i_want_them, old_enough, young_enough, close_enough]
+
+metrics:
+  match_rate:  { ratio: [match, impression] }
+  like_rate:   { ratio: [like, impression] }
+  report_rate: { ratio: [report, impression] }
+
+privacy:
+  retention: { default: 365d }
+  opt_out: { attribute: personalization, equals: false, use: popular_nearby }
+
+feedback:
+  reasons:
+    not_my_type:
+      label: Not my type
+      applies_to: { similar: 0.8, terms: [interests] }
+      effect: { taste: -1 }
+    too_far:
+      label: Too far away
+      applies_to: item
+      effect: hide
+    seen_them:
+      label: I have already seen this person
+      applies_to: item
+      effect: hide
+
+recommendable: user

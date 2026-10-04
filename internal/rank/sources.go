@@ -2,6 +2,7 @@ package rank
 
 import (
 	"sort"
+	"time"
 
 	"github.com/timurcravtov/walrus/internal/schema"
 )
@@ -15,6 +16,7 @@ var sources = map[string]sourceFn{
 	"co_occurrence":  coListedWithSeed,
 	"user_neighbors": func(s *snapshot, _ schema.CandidateSource, cap int) []int { return s.likedByNeighbours(cap) },
 	"popular":        func(s *snapshot, _ schema.CandidateSource, cap int) []int { return s.popular(cap) },
+	"fresh":          func(s *snapshot, _ schema.CandidateSource, cap int) []int { return s.fresh(cap) },
 }
 
 // generate builds the candidate set from the recommender's sources. With no sources declared, every
@@ -98,6 +100,33 @@ func (s *snapshot) popular(cap int) []int {
 		}
 	}
 	return topIndices(counts, cap, s.inSeed)
+}
+
+// fresh are the newest items, by the entity's lifecycle.created attribute. An entity with no
+// lifecycle.created has no newest.
+func (s *snapshot) fresh(cap int) []int {
+	attr := ""
+	if lc := s.sch.Entities[s.typ].Lifecycle; lc != nil {
+		attr = lc.Created
+	}
+	var when []time.Time
+	idxs := make([]int, 0, len(s.items))
+	for i, e := range s.items {
+		if t, ok := e.Attrs[attr].AsTime(); ok && !s.inSeed[i] {
+			idxs = append(idxs, i)
+			when = append(when, t)
+		}
+	}
+	order := make([]int, len(idxs))
+	for k := range order {
+		order[k] = k
+	}
+	sort.SliceStable(order, func(a, b int) bool { return when[order[a]].After(when[order[b]]) })
+	out := make([]int, 0, min(cap, len(order)))
+	for _, k := range order[:min(cap, len(order))] {
+		out = append(out, idxs[k])
+	}
+	return out
 }
 
 // topIndices are the positions with the highest positive scores, at most cap of them.

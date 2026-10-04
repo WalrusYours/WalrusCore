@@ -42,7 +42,7 @@ anything changes, and a dry run lets CI check a schema without applying it.
 
 ## Where to go next
 
-- [`schema-examples/`](schema-examples/) holds nine complete schemas (three of them, and part
-  of a fourth, use the schema v2 sections), and
+- [`schema-examples/`](schema-examples/) holds thirteen complete schemas (seven of them use the
+  schema v2 sections: several recommenders, seeds, context, rules, geo points), and
   [`schema-examples/README.md`](schema-examples/README.md) explains every key and
   follows a schema from upload to going live.

@@ -168,16 +168,23 @@ contributed says in words what it found, using the actual songs, genres and numb
 > lists it under `warnings`.
 >
 > - **Signals:** `item_neighbors`, `co_occurrence`, `attribute_target`, `global_count`, `low_exposure`,
->   `age_decay`, `context_match`, `provided` and `user_neighbors`.
-> - **Candidate sources:** `item_neighbors`, `co_occurrence`, `user_neighbors` (for user seeds) and `popular`; with
->   none declared, every item of the type.
-> - **Constraints:** every form (`in_seed`, attribute `contains`/`equals`/`in`/`gt`/`lt`, `interacted`). A
->   constraint that reads something the request does not have, such as a `$user` attribute, does not apply.
+>   `age_decay`, `context_match`, `provided`, `user_neighbors` and `proximity` (nearer is better, from `geo`
+>   points).
+> - **Candidate sources:** `item_neighbors`, `co_occurrence`, `user_neighbors` (for user seeds), `popular` and
+>   `fresh` (the newest by `lifecycle.created`); with none declared, every item of the type.
+> - **Constraints:** every form (`in_seed`, attribute `contains`/`equals`/`in`/`gt`/`gte`/`lt`/`lte`,
+>   `within_km` of a place, `interacted`). Operands can read `$user.<attribute>` (the user's own entity),
+>   `$context.<field>` and `$seed.<attribute>` (the seed items' values, for "more from this author"). A
+>   constraint that reads something the request does not have does not apply.
 > - **Rules:** attribute quotas (`max` per `per` positions).
 > - **Similarity metrics:** `jaccard`, `cosine`, `equals`, `log_ratio` and `closeness`. A knob bound to
 >   `similarity.<type>.<term>.weight` sets that term's weight for the recommenders that offer it, which is how
 >   each audio feature (energy, mood, danceability, acoustic feel, tempo) gets its own slider.
-> - **Not yet:** `trend`, `own_history`, diversity re-ranking and the other rule kinds.
+> - **Not yet:** `trend`, `own_history`, `satiation`, `recurrence`, `formula`, `attribute_match`,
+>   `attribute_value`, `sequence`, `mutual_connections`, diversity re-ranking, `mix`, `group`, `reciprocal`
+>   (two-sided matching, used by `dating.yml`) and the `place`, `cap` and `pin` rules.
+>
+> Attributes marked `sensitive` count in scoring and constraints but are never named in a reason.
 >
 > Two kinds of similarity are kept apart. **Item to item** compares what items are (the schema's
 > `similarity.<type>` terms) or how playlists and baskets hold them together (`co_occurrence`). **User to

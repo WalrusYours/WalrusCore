@@ -144,6 +144,23 @@ func (v *validator) signalParams(p string, sg SignalSpec) {
 		} else {
 			v.userRefs(p+".against", against)
 		}
+	case "proximity":
+		attr("on", true, func(a AttributeSpec) string {
+			if a.Type != TypeGeo {
+				return fmt.Sprintf("proximity needs a geo attribute, %q is %s", params["on"], a.Type)
+			}
+			return ""
+		})
+		if to, ok := str("to"); ok {
+			v.geoRef(p+".to", to)
+		} else if _, present := params["to"]; !present {
+			v.add(p+".to", "proximity needs to: $context.<geo field> or $user.<geo attribute>")
+		}
+		if raw, ok := params["half_distance"]; ok {
+			if n, isNum := trendNumber(raw); !isNum || n <= 0 {
+				v.add(p+".half_distance", "half_distance is a distance in km, greater than 0")
+			}
+		}
 	case "diversity_rerank":
 		attr("on", true, nil)
 	case "co_occurrence":

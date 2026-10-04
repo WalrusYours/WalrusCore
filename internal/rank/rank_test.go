@@ -78,7 +78,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	st := memory.New()
 	f := &fixture{t: t, sch: sch, ing: ingest.NewService(sch, st), ranks: New(st)}
-	f.svc = recommend.NewService(sch, f.ranks)
+	f.svc = recommend.NewService(sch, f.ranks).WithHistory(f.ranks)
 
 	var raws []ingest.Raw
 	for _, s := range songs {

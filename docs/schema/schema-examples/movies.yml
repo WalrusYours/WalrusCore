@@ -1,0 +1,163 @@
+# Film streaming. What it shows that the other examples do not:
+#   - star ratings (an explicit interaction, centred so that 3 stars is neutral);
+#   - the platform's own ranking model blended in (a `provided` signal and candidate source);
+#   - editorial rules: boost the platform's originals, bury very old titles;
+#   - "more from this director": a recommender scoped by the seed film's own attribute;
+#   - an age limit that is a hard filter, from a sensitive attribute of the user;
+#   - a slider that only makes sense while a switch is on (`depends_on`).
+version: 1
+
+meta:
+  name: Reel
+  description: Films to stream.
+  locales: [en]
+  default_locale: en
+
+entities:
+  user:
+    key: id
+    attributes:
+      country:         { type: categorical }
+      max_age_rating:  { type: int, range: [0, 21], sensitive: true }   # 0, 12, 16, 18: never shown in a reason
+      personalization: { type: bool }
+  director:
+    key: id
+    attributes:
+      name: { type: string }
+  film:
+    key: id
+    lifecycle:
+      created: released_at
+    attributes:
+      title:        { type: string }
+      director_id:  { type: ref, entity: director }
+      genres:       { type: set, of: string }
+      year:         { type: int, range: [1900, 2100] }
+      runtime_min:  { type: int, range: [1, 600] }
+      age_rating:   { type: int, range: [0, 21] }
+      released_at:  { type: timestamp }
+      original:     { type: bool }                       # made by the platform
+
+interactions:
+  impression: { kind: exposure, target: film, retention: 30d }
+  watch:      { kind: positive, weight: 2, value: fraction_watched, half_life: 60d }
+  rate:       { kind: explicit, weight: 4, value: stars, transform: "(v - 3) / 2", half_life: 365d, dedupe: per_item }
+  watchlist:  { kind: positive, weight: 2, half_life: 60d, dedupe: per_item }
+  abandon:    { kind: negative, weight: -1.5, half_life: 30d }
+
+similarity:
+  film:
+    - { id: genres,   on: genres,      metric: jaccard,   weight: 0.55 }
+    - { id: director, on: director_id, metric: equals,    weight: 0.15 }
+    - { id: era,      on: year,        metric: closeness, weight: 0.15 }
+    - { id: length,   on: runtime_min, metric: closeness, weight: 0.15 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  content:          { type: item_neighbors, default: 0.5 }
+  people_like_you:  { type: user_neighbors, default: 0.4 }
+  popularity:       { type: global_count, window: 30d, normalise: rank, default: 0.15 }   # heavy-tailed: ranks, not min-max
+  recency:          { type: age_decay, on: released_at, half_life: 90d, default: 0.1 }
+  model:            { type: provided, name: ranker_v3, default: 0.3 }                      # the platform's own model
+  exploration:      { type: low_exposure, of: [impression], default: 0.05 }
+
+constraints:
+  - { id: age_ok,        require: { attribute: age_rating, lte: "$user.max_age_rating" } }
+  - { id: not_in_seed,   exclude: { in_seed: true } }
+  - { id: not_watched,   exclude: { interacted: [watch], count_gte: 1, within: 365d } }
+  - { id: same_director, require: { attribute: director_id, equals: "$seed.director_id" } }   # scoped by the seed film
+
+rules:
+  - { id: boost_originals, when: "$item.original", boost: 1.3 }
+  - { id: bury_old,        when: "$item.year < 1970", bury: true }
+  - { id: genre_variety,   quota: { attribute: director_id, max: 2, per: 10 } }
+
+knobs:
+  - id: taste_vs_crowd
+    label: "My taste  <->  What everyone watches"
+    group: Taste
+    range: [0, 1]
+    default: 0.5
+    maps: { content: "0.6 * (1 - x)", people_like_you: "0.4 * x", popularity: "0.3 * x" }
+  - id: show_originals
+    kind: toggle
+    label: Show our originals first
+    group: Editorial
+    default: 1
+    maps: { rules.boost_originals.strength: "x" }
+  - id: originals_amount
+    label: "How many originals"
+    group: Editorial
+    range: [0, 1]
+    default: 0.5
+    depends_on: show_originals                 # dimmed while the switch above is off
+    maps: { recency: "0.3 * x" }
+  - id: use_ratings
+    kind: toggle
+    label: Count my star ratings
+    group: Taste
+    default: 1
+    maps: { interactions.rate.weight_scale: "x" }
+
+presets:
+  default:  { taste_vs_crowd: 0.5 }
+  popular:  { taste_vs_crowd: 1, show_originals: 0 }
+  my_taste: { taste_vs_crowd: 0, use_ratings: 1 }
+
+recommenders:
+  home:
+    label: Picked for you
+    for: [film]
+    seed: user
+    candidates:
+      - { source: item_neighbors, cap: 200 }
+      - { source: user_neighbors, cap: 150 }
+      - { source: popular, cap: 50 }
+      - { source: provided, cap: 100 }                       # the platform's own shortlist joins the pool
+    signals: [content, people_like_you, popularity, recency, model, exploration]
+    constraints: [age_ok, not_watched]
+    rules: [boost_originals, bury_old, genre_variety]
+    knobs: [taste_vs_crowd, show_originals, originals_amount, use_ratings]
+    limit: { default: 24, max: 60 }
+    fallback:
+      - { when: "profile.size == 0", use: top_films }
+
+  similar_films:                                # on a film's page
+    label: More like this
+    for: [film]
+    seed: item
+    blend_user: 0.2
+    candidates:
+      - { source: item_neighbors, cap: 100 }
+    signals: [content, people_like_you, popularity]
+    constraints: [age_ok, not_in_seed]
+    knobs: [taste_vs_crowd]
+
+  more_from_director:                           # the same director's other films, best first
+    label: More from this director
+    for: [film]
+    seed: item
+    candidates:
+      - { source: popular, cap: 100 }
+    signals: [popularity, recency]
+    constraints: [age_ok, not_in_seed, same_director]
+    limit: { default: 8, max: 20 }
+
+  top_films:                                    # not personal: cold start and the non-profiled option
+    label: Top films
+    for: [film]
+    seed: none
+    signals: [popularity, recency]
+    constraints: [age_ok]
+    rules: [boost_originals]
+
+metrics:
+  play_rate:   { ratio: [watch, impression] }
+  abandonment: { ratio: [abandon, impression] }
+
+privacy:
+  retention: { default: 365d }
+  opt_out: { attribute: personalization, equals: false, use: top_films }
+
+recommendable: film

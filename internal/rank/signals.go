@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/geo"
 	"github.com/timurcravtov/walrus/internal/schema"
 )
 
@@ -27,6 +28,7 @@ var signalTypes = map[string]signalType{
 	"co_occurrence":    {prepare: prepareCoOccurrence, score: coOccurrence},
 	"user_neighbors":   {prepare: prepareUsers, score: userNeighbours},
 	"attribute_target": {score: attributeTarget},
+	"proximity":        {score: proximity},
 	"global_count":     {prepare: prepareGlobalCount, score: globalCount},
 	"low_exposure":     {prepare: prepareExposure, score: lowExposure},
 	"age_decay":        {score: ageDecay},
@@ -100,6 +102,42 @@ func userNeighbours(rk *ranking, _ string, spec schema.SignalSpec) ([]float64, f
 			who = fmt.Sprintf("%d people", n)
 		}
 		return rk.say(spec, "Also in the playlists of "+who+" with similar taste", nil)
+	}
+}
+
+// proximity favours what is near the place the request comes from: 2^(-km / half_distance), so a
+// place at the half distance scores 0.5. Without a position in the request every candidate scores
+// the same.
+func proximity(rk *ranking, _ string, spec schema.SignalSpec) ([]float64, func(int) string) {
+	raw := make([]float64, len(rk.candidates))
+	attr := str(spec.Params["on"])
+	from, ok := rk.resolve(str(spec.Params["to"]))
+	if !ok || attr == "" {
+		return raw, nil
+	}
+	half := 10.0
+	if f, isNum := spec.Params["half_distance"].(float64); isNum && f > 0 {
+		half = f
+	} else if n, isInt := spec.Params["half_distance"].(int); isInt && n > 0 {
+		half = float64(n)
+	}
+	km := func(c int) (float64, bool) { return geo.Km(rk.items[rk.candidates[c]].Attrs[attr], from) }
+	for c := range rk.candidates {
+		if d, ok := km(c); ok {
+			raw[c] = math.Exp2(-d / half)
+		}
+	}
+	return raw, func(c int) string {
+		d, ok := km(c)
+		switch {
+		case !ok:
+			return ""
+		case d < 1:
+			return rk.say(spec, "Under 1 km away", nil)
+		case d < 10:
+			return rk.say(spec, fmt.Sprintf("%.1f km away", d), nil)
+		}
+		return rk.say(spec, fmt.Sprintf("%.0f km away", d), nil)
 	}
 }
 
@@ -236,6 +274,11 @@ func ageDecay(rk *ranking, _ string, spec schema.SignalSpec) ([]float64, func(in
 	raw := make([]float64, len(rk.candidates))
 	half, ok := dur(spec.Params["half_life"])
 	attr := str(spec.Params["on"])
+	if attr == "" {
+		if lc := rk.sch.Entities[rk.typ].Lifecycle; lc != nil {
+			attr = lc.Created // age_decay without on: reads the entity's lifecycle.created
+		}
+	}
 	if !ok || half <= 0 || attr == "" {
 		return raw, nil
 	}

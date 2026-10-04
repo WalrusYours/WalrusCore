@@ -1,6 +1,6 @@
 # Schema examples
 
-This page explains what a schema is made of, lists six complete examples, and follows a
+This page explains what a schema is made of, lists thirteen complete examples, and follows a
 schema from upload to going live. For what a schema is and why WALRUS uses one, see the
 [schema overview](../README.md). For the integration steps around it (running WALRUS,
 sending events, reading recommendations) see
@@ -51,11 +51,12 @@ entities:
 |------|---------|
 | `key` | The name of the id field, normally `id`. Required. |
 | `attributes` | The fields you will send, each with a `type`. |
-| `type` | One of `categorical` (a small set of labels such as a topic), `string` (free text), `float`, `int`, `bool`, `timestamp`, `set` (a list of strings such as tags), `vector` (an embedding), `ref` (an id of another entity). |
+| `type` | One of `categorical` (a small set of labels such as a topic), `string` (free text), `float`, `int`, `bool`, `timestamp`, `set` (a list of strings such as tags), `vector` (an embedding), `ref` (an id of another entity), `geo` (a point on the Earth, sent as `{ "lat": 47.01, "lon": 28.86 }`). |
 | `of` | For `set`: the element type, currently `string`. |
 | `entity` | For `ref`: which entity it points to, for example `{ type: ref, entity: user }`. |
 | `dim` | For `vector`: the number of dimensions. |
 | `range` | For `float` and `int`: `[min, max]`, with min below max. |
+| `sensitive` | The attribute counts in scoring and constraints but is never named in a reason. |
 | `optional` | The attribute may be missing. Not allowed together with `computed`. |
 | `computed` | An expression over the entity's other attributes, evaluated at ingest, for example `"len(title)"`. The platform never sends a computed attribute. Cycles are rejected. |
 
@@ -208,17 +209,30 @@ constraints:
   - exclude: { interacted: [dislike] }
   - exclude: { interacted: [skip], count_gte: 3, within: 30d }
   - exclude: { attribute: seller_id, in: "$user.blocked_sellers" }
+  - require: { attribute: age, gte: "$user.min_age" }                              # inclusive range
+  - require: { attribute: author_id, equals: "$seed.author_id" }                    # same author as the seed
+  - require: { attribute: location, within_km: 15, of: "$context.location" }       # near the request
 ```
 
 | Word | Meaning |
 |------|---------|
 | `require` / `exclude` | Keep only items that match, or drop the items that match. Use one per constraint. |
 | `attribute` | Test an attribute of the recommendable entity. Needs exactly one operator below. |
-| `equals`, `in`, `gt`, `lt`, `contains` | The test. The right side may use `$user.<attribute>`. |
+| `equals`, `in`, `gt`, `gte`, `lt`, `lte`, `contains` | The test (`gte` and `lte` include the bound). The right side may use `$user.<attribute>`, `$context.<field>` or `$seed.<attribute>`. |
+| `within_km`, `of` | The attribute is a `geo` point at most this far (great-circle kilometres) from the place `of`: `$context.<geo field>` or `$user.<geo attribute>`. |
 | `interacted` | Test the user's history instead: a list of interaction names. |
 | `count_gte` | Only with `interacted`: at least this many such events. |
 | `within` | Only with `interacted`: only events inside this period, for example `30d`. |
 | `when` | Apply the constraint only if this expression is true, for example `"$user.explicit_allowed == false"`. |
+
+`$seed.<attribute>` is the value of an attribute on the seed items: "more from this author", "other
+lessons in this course". For an `item` seed it is that item's value; for `items` and `session` seeds it
+is the set of the seed items' values, and `equals` or `in` match any of them. Only recommenders with an
+`item`, `items` or `session` seed may list such a constraint.
+
+A condition that reads something the request does not have (no seed items found, a `$user` attribute the
+user does not have, a context field that was not sent, a place that was not given) does not apply, so
+missing data never empties a list.
 
 ### `recommendable`
 
@@ -234,7 +248,7 @@ decides who may push.
 
 ## Examples
 
-Nine complete `schema.yml` files, one per kind of platform. Copy the closest one, rename the
+Thirteen complete `schema.yml` files, one per kind of platform. Copy the closest one, rename the
 entities and attributes to match your data, and push it. Each file is checked by the
 server's test suite, so they stay valid as the schema language evolves. The first six use
 only the v1 sections; `shop.yml`, `shelf.yml` and the playlist part of `spotify.yml` use the
@@ -251,6 +265,10 @@ schema v2 sections (recommenders, context, rules, metrics, experiments, feedback
 | [`news.yml`](news.yml) | News reader | `computed` attributes (reading time) and `locked` values; a knob that widens topics |
 | [`jobs.yml`](jobs.yml) | Job board | A computed `skill_count`, `apply` and `hide` interactions that exclude |
 | [`courses.yml`](courses.yml) | Online learning | Excluding completed courses and recently dropped ones |
+| [`movies.yml`](movies.yml) | Film streaming | Star ratings (explicit, centred on 3), the platform's own model blended in (`provided`), boosting originals and burying old titles, "more from this director" (`$seed`), an age limit from a sensitive attribute, a slider that depends on a switch |
+| [`social.yml`](social.yml) | Social network | A follow graph: one feed of only the accounts you follow, one of those you do not, "more from this author", who to follow (people recommended to people) |
+| [`local.yml`](local.yml) | Places near you | `geo` points, nearer is better (`proximity`), a radius that is a hard filter (`within_km`), a saved home place, "other branches of this chain", a budget in the request |
+| [`dating.yml`](dating.yml) | Dating | Two-sided matching (`reciprocal`, planned in the engine), mutual preferences as filters (gender, an inclusive age range, distance), sensitive attributes that are never explained, "they already liked you" as host-supplied scores, a once-a-day cap |
 
 ## What happens when you upload a schema
 
@@ -351,3 +369,10 @@ validate | diff | apply` commands (the binary is a scaffold), per-tenant storage
 versions in Neo4j (versions are kept in memory today), and scoped `schema:write` keys (the
 push currently requires the admin key). The schema language itself will not change when
 they land.
+
+What the engine ranks today is narrower than what the schema language accepts. A push that is
+accepted lists, under `warnings`, everything it asks for that the engine does not do yet. That is
+today: the `trend`, `own_history`, `satiation`, `recurrence`, `formula`, `attribute_match`,
+`attribute_value`, `sequence` and `mutual_connections` signals, diversity re-ranking, `mix`, `group`,
+`reciprocal`, and the `place`, `cap` and `pin` rules. `dating.yml` relies on `reciprocal`: until the engine
+scores both sides, the list is ranked from the requester's side only.

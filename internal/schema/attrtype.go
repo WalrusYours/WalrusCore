@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/geo"
 )
 
 type AttrType string
@@ -20,11 +21,12 @@ const (
 	TypeSet         AttrType = "set"
 	TypeVector      AttrType = "vector"
 	TypeRef         AttrType = "ref"
+	TypeGeo         AttrType = "geo" // a point: {"lat": .., "lon": ..}, kept as a two-number vector
 )
 
 var AttrTypes = []AttrType{
 	TypeCategorical, TypeString, TypeFloat, TypeInt, TypeBool,
-	TypeTimestamp, TypeSet, TypeVector, TypeRef,
+	TypeTimestamp, TypeSet, TypeVector, TypeRef, TypeGeo,
 }
 
 func (t AttrType) Valid() bool {
@@ -48,7 +50,7 @@ func (t AttrType) Kind() domain.Kind {
 		return domain.KindTime
 	case TypeSet:
 		return domain.KindSet
-	case TypeVector:
+	case TypeVector, TypeGeo:
 		return domain.KindVector
 	}
 	return domain.KindNull
@@ -124,6 +126,9 @@ func (a AttributeSpec) Coerce(raw any) (domain.Value, error) {
 			out = append(out, s)
 		}
 		return domain.Set(out...), nil
+
+	case TypeGeo:
+		return geo.Parse(raw)
 
 	case TypeVector:
 		items, ok := raw.([]any)

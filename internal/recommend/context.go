@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/geo"
 	"github.com/timurcravtov/walrus/internal/schema"
 )
 
@@ -97,6 +98,8 @@ func contextValue(f schema.ContextField, raw any) (domain.Value, error) {
 			return domain.Null(), fmt.Errorf("expected an RFC 3339 time such as 2026-10-03T12:00:00Z")
 		}
 		return domain.Time(t), nil
+	case schema.TypeGeo:
+		return geo.Parse(raw)
 	case schema.TypeSet:
 		list, ok := raw.([]any)
 		if !ok {

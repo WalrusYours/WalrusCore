@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/geo"
 	"github.com/timurcravtov/walrus/internal/schema"
 )
 
@@ -104,10 +105,10 @@ func (s *snapshot) attributeMatches(cond *schema.Condition, have domain.Value) (
 		if !ok {
 			return false, false
 		}
-		text, _ := want.AsString()
-		if set, isSet := have.AsSet(); isSet {
-			return slices.Contains(set, text), true
+		if _, isSet := want.AsSet(); isSet || hasSet(have) {
+			return overlap(have, want), true
 		}
+		text, _ := want.AsString()
 		str, _ := have.AsString()
 		return strings.Contains(str, text), true
 
@@ -116,6 +117,9 @@ func (s *snapshot) attributeMatches(cond *schema.Condition, have domain.Value) (
 		if !ok {
 			return false, false
 		}
+		if _, isSet := want.AsSet(); isSet {
+			return overlap(have, want), true
+		}
 		return have.Equal(want), true
 
 	case cond.In != "":
@@ -123,35 +127,86 @@ func (s *snapshot) attributeMatches(cond *schema.Condition, have domain.Value) (
 		if !ok {
 			return false, false
 		}
-		set, _ := want.AsSet()
-		str, _ := have.AsString()
-		return slices.Contains(set, str), true
+		return overlap(have, want), true
 
-	case cond.Gt != "" || cond.Lt != "":
-		f, hasValue := have.AsFloat()
-		ref, above := cond.Gt, true
-		if ref == "" {
-			ref, above = cond.Lt, false
-		}
-		bound, ok := s.number(ref)
+	case cond.WithinKm > 0:
+		from, ok := s.resolve(cond.Of)
 		if !ok {
 			return false, false
 		}
-		if above {
-			return hasValue && f > bound, true
+		km, located := geo.Km(have, from)
+		return located && km <= cond.WithinKm, true
+	}
+
+	for _, cmp := range []struct {
+		ref  string
+		test func(have, bound float64) bool
+	}{
+		{cond.Gt, func(h, b float64) bool { return h > b }},
+		{cond.Gte, func(h, b float64) bool { return h >= b }},
+		{cond.Lt, func(h, b float64) bool { return h < b }},
+		{cond.Lte, func(h, b float64) bool { return h <= b }},
+	} {
+		if cmp.ref == "" {
+			continue
 		}
-		return hasValue && f < bound, true
+		bound, ok := s.number(cmp.ref)
+		if !ok {
+			return false, false
+		}
+		f, hasValue := have.AsFloat()
+		return hasValue && cmp.test(f, bound), true
 	}
 	return false, false
 }
 
-// resolve reads a $-reference from the request, or takes the text as it is.
+// hasSet reports whether a value is a set.
+func hasSet(v domain.Value) bool {
+	_, ok := v.AsSet()
+	return ok
+}
+
+// members are the strings a value stands for: its elements for a set, itself for a string.
+func members(v domain.Value) []string {
+	if set, ok := v.AsSet(); ok {
+		return set
+	}
+	if str, ok := v.AsString(); ok {
+		return []string{str}
+	}
+	return nil
+}
+
+// overlap reports whether two values share a member.
+func overlap(a, b domain.Value) bool {
+	want := members(b)
+	return slices.ContainsFunc(members(a), func(m string) bool { return slices.Contains(want, m) })
+}
+
+// resolve reads a $-reference from the request, or takes the text as it is. $seed.<attr> is the set
+// of that attribute's values on the seed items.
 func (s *snapshot) resolve(ref string) (domain.Value, bool) {
-	if strings.HasPrefix(ref, "$") {
+	switch {
+	case strings.HasPrefix(ref, "$seed."):
+		return s.seedValues(strings.TrimPrefix(ref, "$seed."))
+	case strings.HasPrefix(ref, "$"):
 		v, ok := s.env[ref]
 		return v, ok && !v.IsNull()
 	}
 	return domain.Str(ref), true
+}
+
+// seedValues is the distinct values of an attribute over the seed items, as a set; false when the
+// seed has none.
+func (s *snapshot) seedValues(attr string) (domain.Value, bool) {
+	var vals []string
+	for _, i := range s.seed {
+		vals = append(vals, members(s.items[i].Attrs[attr])...)
+	}
+	if len(vals) == 0 {
+		return domain.Null(), false
+	}
+	return domain.Set(vals...), true
 }
 
 func (s *snapshot) literal(v any) (domain.Value, bool) {

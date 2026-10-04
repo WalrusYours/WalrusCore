@@ -3,6 +3,7 @@ package rank
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -55,7 +56,7 @@ func (rk *ranking) termPhrase(cand, seedItem int, sel []bool, weights []float64)
 		}
 		v, ok := rk.termValue(cand, seedItem, t)
 		switch {
-		case !ok:
+		case !ok || rk.sensitive(t.attrs):
 		case t.metric == string(schema.MetricCloseness):
 			sound = append(sound, feature{name: humanise(t.id), attr: t.attrs[0]})
 			soundScore += weights[k] * v
@@ -73,6 +74,9 @@ func (rk *ranking) termPhrase(cand, seedItem int, sel []bool, weights []float64)
 		return ""
 	}
 	t := rk.terms[bestTerm]
+	if rk.sensitive(t.attrs) {
+		return "" // a sensitive attribute counts in the score but is never named
+	}
 	switch schema.Metric(t.metric) {
 	case schema.MetricJaccard:
 		have, _ := a[t.attrs[0]].AsSet()
@@ -104,6 +108,12 @@ func (rk *ranking) termPhrase(cand, seedItem int, sel []bool, weights []float64)
 		return "Sounds like " + name
 	}
 	return ""
+}
+
+// sensitive reports whether any of the attributes is marked sensitive: usable in scoring and
+// constraints, never put into words.
+func (s *snapshot) sensitive(attrs []string) bool {
+	return slices.ContainsFunc(attrs, func(a string) bool { return s.sch.Entities[s.typ].Attributes[a].Sensitive })
 }
 
 // feature is a number to compare, and the word for it.

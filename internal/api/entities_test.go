@@ -49,7 +49,7 @@ func TestSendAndReadEntities(t *testing.T) {
 	}
 	_ = json.Unmarshal(raw, &out)
 	if res.StatusCode != 200 || out.Accepted != 2 || len(out.Rejected) != 1 || out.Rejected[0].ID != "b" ||
-		!strings.Contains(out.Rejected[0].Error, "outside the range") {
+		!strings.Contains(out.Rejected[0].Error, "outside range") {
 		t.Fatalf("%d %s", res.StatusCode, raw)
 	}
 
@@ -113,7 +113,7 @@ func TestPutOneEntity(t *testing.T) {
 
 	res, raw = do(t, srv, "PUT", "/v1/entities/track/b", body("7"), bearer)
 	e := wantError(t, res, raw, 400, "validation_error")
-	if !strings.Contains(e.Error.Message, "outside the range") {
+	if !strings.Contains(e.Error.Message, "outside range") {
 		t.Errorf("message = %q", e.Error.Message)
 	}
 	res, raw = do(t, srv, "PUT", "/v1/entities/song/b", body("0.5"), bearer)

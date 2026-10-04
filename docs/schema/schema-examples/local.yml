@@ -1,0 +1,162 @@
+# Local discovery: restaurants and services near you. What it shows:
+#   - places on a map (a `geo` attribute) and the place a request comes from (`$context.location`);
+#   - nearer is better (`proximity`), and beyond a radius a place is not offered at all
+#     (`within_km`, a hard filter that no slider can widen);
+#   - "more from this chain": a recommender scoped by the seed venue's own chain;
+#   - a budget sent with the request.
+version: 1
+
+meta:
+  name: Nearby
+  description: Places near you.
+  locales: [en]
+  default_locale: en
+
+entities:
+  user:
+    key: id
+    attributes:
+      home:            { type: geo, optional: true }      # a saved place, used when the request has none
+      diet:            { type: set, of: string, optional: true }
+      personalization: { type: bool }
+  chain:
+    key: id
+    attributes:
+      name: { type: string }
+  venue:
+    key: id
+    lifecycle:
+      created: opened_at
+      active: { attribute: status, in: [open_for_business] }
+    attributes:
+      name:       { type: string }
+      chain_id:   { type: ref, entity: chain, optional: true }
+      cuisines:   { type: set, of: string }
+      diets:      { type: set, of: string }               # what it can serve: vegan, halal...
+      location:   { type: geo }
+      price_level: { type: int, range: [1, 4] }
+      rating:     { type: float, range: [0, 5] }
+      status:     { type: categorical }
+      opened_at:  { type: timestamp }
+
+interactions:
+  impression: { kind: exposure, target: venue, retention: 30d }
+  view:       { kind: positive, weight: 1, value: seconds, transform: log1p, half_life: 14d }
+  save:       { kind: positive, weight: 3, half_life: 90d, dedupe: per_item }
+  visit:      { kind: conversion, weight: 8, half_life: 180d }
+  review:     { kind: explicit, weight: 4, value: stars, transform: "(v - 3) / 2", half_life: 365d, dedupe: per_item }
+  not_for_me: { kind: negative, weight: -5, half_life: 90d, dedupe: per_item }
+
+context:
+  location: { type: geo, optional: true }                 # where the person is now
+  budget:   { type: int, range: [1, 4], optional: true }  # the price level they want tonight
+  hour:     { type: int, derive: hour }
+
+similarity:
+  venue:
+    - { id: cuisines, on: cuisines,    metric: jaccard,   weight: 0.6 }
+    - { id: price,    on: price_level, metric: closeness, weight: 0.2 }
+    - { id: quality,  on: rating,      metric: closeness, weight: 0.2 }
+  user:
+    - { via: interactions, metric: cosine }
+
+signals:
+  near:         { type: proximity, on: location, to: "$context.location", half_distance: 3, default: 0.5 }
+  taste:        { type: item_neighbors, default: 0.4 }
+  people_like_you: { type: user_neighbors, default: 0.3 }
+  quality:      { type: attribute_value, on: rating, default: 0.3 }
+  busy:         { type: global_count, window: 30d, of: [visit], normalise: rank, default: 0.2 }
+  fits_budget:  { type: attribute_target, on: price_level, target: "$context.budget", default: 0.3 }
+  fresh:        { type: age_decay, half_life: 60d, default: 0.05 }                  # a new place, for a while
+
+constraints:
+  - { id: open,          require: { attribute: status, equals: open_for_business } }
+  - { id: within_range,  require: { attribute: location, within_km: 15, of: "$context.location" } }
+  - { id: near_home,     require: { attribute: location, within_km: 15, of: "$user.home" } }
+  - { id: diet_ok,       require: { attribute: diets, contains: "$user.diet" } }
+  - { id: same_chain,    require: { attribute: chain_id, equals: "$seed.chain_id" } }
+  - { id: not_in_seed,   exclude: { in_seed: true } }
+  - { id: not_for_me,    exclude: { interacted: [not_for_me], count_gte: 1 } }
+
+rules:
+  - { id: chain_variety, quota: { attribute: chain_id, max: 2, per: 10 } }
+
+knobs:
+  - id: close_vs_good
+    label: "Closest  <->  Best rated"
+    group: What matters
+    range: [0, 1]
+    default: 0.4
+    maps: { near: "0.8 * (1 - x)", quality: "0.6 * x" }
+  - id: taste_vs_crowd
+    label: "My taste  <->  What people like me go to"
+    group: What matters
+    range: [0, 1]
+    default: 0.5
+    maps: { taste: "0.6 * (1 - x)", people_like_you: "0.5 * x" }
+  - id: stay_on_budget
+    kind: toggle
+    label: Stay on my budget
+    group: What matters
+    default: 1
+    maps: { fits_budget: "0.4 * x" }
+
+presets:
+  default:    { close_vs_good: 0.4, taste_vs_crowd: 0.5 }
+  around_me:  { close_vs_good: 0 }
+  worth_a_trip: { close_vs_good: 1 }
+
+recommenders:
+  nearby:
+    label: Near you
+    for: [venue]
+    seed: user
+    candidates:
+      - { source: item_neighbors, cap: 200 }
+      - { source: user_neighbors, cap: 100 }
+      - { source: popular, cap: 100 }
+    signals: [near, taste, people_like_you, quality, busy, fits_budget, fresh]
+    constraints: [open, within_range, near_home, diet_ok, not_for_me]
+    rules: [chain_variety]
+    knobs: [close_vs_good, taste_vs_crowd, stay_on_budget]
+    limit: { default: 20, max: 50 }
+    fallback:
+      - { when: "profile.size == 0", use: popular_nearby }
+
+  similar_nearby:                              # on a venue's page: like this one, close by
+    label: Similar places
+    for: [venue]
+    seed: item
+    candidates:
+      - { source: item_neighbors, cap: 100 }
+    signals: [taste, near, quality]
+    constraints: [open, within_range, diet_ok, not_in_seed]
+    knobs: [close_vs_good]
+    limit: { default: 8, max: 20 }
+
+  more_from_chain:                             # the other branches of this chain
+    label: Other branches
+    for: [venue]
+    seed: item
+    candidates:
+      - { source: popular, cap: 100 }
+    signals: [near, quality]
+    constraints: [open, same_chain, not_in_seed]
+    limit: { default: 5, max: 10 }
+
+  popular_nearby:                              # not personal: cold start and the non-profiled option
+    label: Popular near you
+    for: [venue]
+    seed: none
+    signals: [near, busy, quality]
+    constraints: [open, within_range]
+
+metrics:
+  visit_rate: { ratio: [visit, impression], attribution: 24h }
+  save_rate:  { ratio: [save, impression] }
+
+privacy:
+  retention: { default: 365d }
+  opt_out: { attribute: personalization, equals: false, use: popular_nearby }
+
+recommendable: venue

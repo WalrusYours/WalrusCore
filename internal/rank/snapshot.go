@@ -3,6 +3,7 @@ package rank
 import (
 	"context"
 	"errors"
+	"maps"
 	"math"
 	"slices"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
 	"github.com/timurcravtov/walrus/internal/schema/expr"
+	"github.com/timurcravtov/walrus/internal/store"
 )
 
 const (
@@ -95,7 +97,11 @@ func (r *Ranker) build(ctx context.Context, in recommend.RankInput) (*snapshot, 
 	for i, e := range s.items {
 		s.index[e.ID] = i
 	}
-	s.env = in.Env
+	s.env = make(expr.Env, len(in.Env)+8)
+	maps.Copy(s.env, in.Env)
+	if err := s.readUser(ctx); err != nil {
+		return nil, err
+	}
 
 	s.findSeed(in.Seed)
 	s.scales = s.numericScales()
@@ -245,4 +251,23 @@ func (s *snapshot) name(i int) string {
 		}
 	}
 	return string(s.items[i].ID)
+}
+
+// readUser exposes the requesting user's attributes as $user.<attribute> to the schema's
+// conditions. A user the store has never seen has none, and conditions that read them do not apply.
+func (s *snapshot) readUser(ctx context.Context) error {
+	if s.user == "" {
+		return nil
+	}
+	u, err := s.ranker.store.Entity(ctx, "user", domain.EntityID(s.user))
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for name, v := range u.Attrs {
+		s.env["$user."+name] = v
+	}
+	return nil
 }

@@ -14,6 +14,7 @@ var (
 	identRe    = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 	userRefRe  = regexp.MustCompile(`\$user\.([A-Za-z_][A-Za-z0-9_]*)`)
 	ctxRefRe   = regexp.MustCompile(`\$context\.([A-Za-z_][A-Za-z0-9_]*)`)
+	seedRefRe  = regexp.MustCompile(`\$seed\.([A-Za-z_][A-Za-z0-9_]*)`)
 	localeRe   = regexp.MustCompile(`^[a-z]{2}(-[A-Z]{2})?$`)
 	reservedEn = []string{"cross"} // `similarity.cross` holds cross-type terms
 )
@@ -24,7 +25,7 @@ var SignalTypes = []string{
 	"item_neighbors", "user_neighbors", "own_history", "global_count",
 	"age_decay", "low_exposure", "attribute_match", "diversity_rerank", "trend",
 	"co_occurrence", "sequence", "mutual_connections", "attribute_target", "attribute_value",
-	"context_match", "provided", "formula", "satiation", "recurrence",
+	"context_match", "provided", "formula", "satiation", "recurrence", "proximity",
 }
 
 // trendKeys are the parameters of a `trend` signal.
@@ -47,6 +48,7 @@ var signalKeys = map[string][]string{
 	"mutual_connections": {"via"},
 	"attribute_target":   {"on", "target"},
 	"attribute_value":    {"on"},
+	"proximity":          {"on", "to", "half_distance"},
 	"context_match":      {"on", "against"},
 	"provided":           {"name"},
 	"formula":            {"expr"},
@@ -404,8 +406,12 @@ func (v *validator) similarity() {
 				v.add(p, "use either on or via, not both")
 			case len(t.On) > 0:
 				for _, on := range t.On {
-					if _, ok := e.Attributes[on]; !ok {
+					a, ok := e.Attributes[on]
+					switch {
+					case !ok:
 						v.add(p+".on", "%q is not an attribute of %s", on, et)
+					case a.Type == TypeGeo:
+						v.add(p+".on", "%q is a geo point; distance is not a similarity of two items, use the proximity signal or a within_km condition", on)
 					}
 				}
 				if t.Weight <= 0 || math.IsNaN(t.Weight) {
@@ -868,14 +874,15 @@ func (v *validator) condition(p string, c *Condition, ents []string) {
 			v.attrIn(p+".attribute", ents, c.Attribute)
 		}
 		ops := 0
-		for _, set := range []bool{c.Equals != nil, c.In != "", c.Gt != "", c.Lt != "", c.Contains != ""} {
+		for _, set := range []bool{c.Equals != nil, c.In != "", c.Gt != "", c.Gte != "", c.Lt != "", c.Lte != "", c.Contains != "", c.WithinKm != 0} {
 			if set {
 				ops++
 			}
 		}
 		if ops != 1 {
-			v.add(p, "an attribute condition needs exactly one of equals, in, gt, lt, contains")
+			v.add(p, "an attribute condition needs exactly one of equals, in, gt, gte, lt, lte, contains, within_km")
 		}
+		v.geoCondition(p, c, ents)
 	} else {
 		for _, it := range c.Interacted {
 			if _, ok := v.s.Interactions[it]; !ok {
@@ -886,10 +893,87 @@ func (v *validator) condition(p string, c *Condition, ents []string) {
 	if (c.CountGTE != 0 || c.Within != 0) && !hasInter {
 		v.add(p, "count_gte and within apply only to interacted conditions")
 	}
-	for field, text := range map[string]string{"in": c.In, "gt": c.Gt, "lt": c.Lt, "contains": c.Contains, "when": c.When} {
+	for field, text := range map[string]string{"in": c.In, "gt": c.Gt, "gte": c.Gte, "lt": c.Lt, "lte": c.Lte, "contains": c.Contains, "of": c.Of, "when": c.When} {
 		v.userRefs(p+"."+field, text)
+		if field != "when" {
+			v.seedRefs(p+"."+field, text, ents)
+		}
 	}
 	if s, ok := c.Equals.(string); ok {
 		v.userRefs(p+".equals", s)
+		v.seedRefs(p+".equals", s, ents)
 	}
+}
+
+// geoCondition checks within_km and of, which only make sense together on a geo attribute, and
+// that the place is itself a geo value.
+func (v *validator) geoCondition(p string, c *Condition, ents []string) {
+	if c.WithinKm == 0 {
+		if c.Of != "" {
+			v.add(p+".of", "of applies only to within_km")
+		}
+		return
+	}
+	if c.WithinKm < 0 || math.IsNaN(c.WithinKm) {
+		v.add(p+".within_km", "within_km must be greater than 0")
+	}
+	for _, e := range ents {
+		if a, ok := v.s.Entities[e].Attributes[c.Attribute]; ok && a.Type != TypeGeo {
+			v.add(p+".attribute", "within_km needs a geo attribute, %q is %s", c.Attribute, a.Type)
+		}
+	}
+	v.geoRef(p+".of", c.Of)
+}
+
+// geoRef checks that text is "$context.<field>" or "$user.<attribute>" and names a geo value.
+func (v *validator) geoRef(p, text string) {
+	if text == "" {
+		v.add(p, "name the place: $context.<geo field> or $user.<geo attribute>")
+		return
+	}
+	switch {
+	case ctxRefRe.MatchString(text):
+		name := ctxRefRe.FindStringSubmatch(text)[1]
+		if f, ok := v.s.Context[name]; ok && f.Type != TypeGeo {
+			v.add(p, "$context.%s is %s, not geo", name, f.Type)
+		}
+	case userRefRe.MatchString(text):
+		name := userRefRe.FindStringSubmatch(text)[1]
+		if a, ok := v.s.Entities["user"].Attributes[name]; ok && a.Type != TypeGeo {
+			v.add(p, "$user.%s is %s, not geo", name, a.Type)
+		}
+	default:
+		v.add(p, "the place is $context.<geo field> or $user.<geo attribute>, got %q", text)
+	}
+}
+
+// seedRefs checks every $seed.<attribute> in text names an attribute of the entities compared.
+func (v *validator) seedRefs(p, text string, ents []string) {
+	for _, m := range seedRefRe.FindAllStringSubmatch(text, -1) {
+		found := false
+		for _, e := range ents {
+			if _, ok := v.s.Entities[e].Attributes[m[1]]; ok {
+				found = true
+			}
+		}
+		if !found {
+			v.add(p, "$seed.%s: %q is not an attribute of %s", m[1], m[1], strings.Join(ents, ", "))
+		}
+	}
+}
+
+// usesSeed reports whether a constraint refers to $seed.<attribute>.
+func (c Constraint) usesSeed() bool {
+	cond := c.Require
+	if cond == nil {
+		cond = c.Exclude
+	}
+	if cond == nil {
+		return false
+	}
+	texts := []string{cond.In, cond.Gt, cond.Gte, cond.Lt, cond.Lte, cond.Contains, cond.Of}
+	if s, ok := cond.Equals.(string); ok {
+		texts = append(texts, s)
+	}
+	return slices.ContainsFunc(texts, func(t string) bool { return seedRefRe.MatchString(t) })
 }
