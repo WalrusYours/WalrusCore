@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/timurcravtov/walrus/internal/domain"
 	"github.com/timurcravtov/walrus/internal/store"
@@ -162,6 +163,70 @@ func Run(t *testing.T, newStore func() store.Store) {
 		wg.Wait()
 		if n, _ := s.CountEntities(ctx); n["track"] != 10 {
 			t.Errorf("counts = %v", n)
+		}
+	})
+
+	t.Run("interactions are stored in arrival order and can be filtered by type", func(t *testing.T) {
+		s := newStore()
+		ts := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+		add := func(user, typ, target string) domain.Interaction {
+			return domain.Interaction{User: domain.UserID(user), Type: typ, Target: domain.EntityID(target), TS: ts}
+		}
+		if err := s.UpsertInteractions(ctx, []domain.Interaction{add("u1", "play", "a"), add("u1", "save", "b"), add("u2", "play", "c")}); err != nil {
+			t.Fatal(err)
+		}
+		all, _ := s.Interactions(ctx)
+		if len(all) != 3 || all[0].Target != "a" || all[2].Target != "c" {
+			t.Errorf("all = %+v", all)
+		}
+		plays, _ := s.Interactions(ctx, "play")
+		if len(plays) != 2 {
+			t.Errorf("plays = %+v", plays)
+		}
+		both, _ := s.Interactions(ctx, "play", "save")
+		if len(both) != 3 {
+			t.Errorf("both = %+v", both)
+		}
+		if none, _ := s.Interactions(ctx, "share"); len(none) != 0 {
+			t.Errorf("none = %+v", none)
+		}
+		if n, _ := s.CountInteractions(ctx); n["play"] != 2 || n["save"] != 1 || len(n) != 2 {
+			t.Errorf("counts = %v", n)
+		}
+	})
+
+	t.Run("sending the same interaction again changes nothing, a different field is a new one", func(t *testing.T) {
+		s := newStore()
+		ts := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+		x := domain.Interaction{User: "u", Type: "add_to_playlist", Target: "a", TS: ts, Fields: map[string]string{"playlist_id": "p1"}}
+		y := x
+		y.Fields = map[string]string{"playlist_id": "p2"}
+		_ = s.UpsertInteractions(ctx, []domain.Interaction{x})
+		_ = s.UpsertInteractions(ctx, []domain.Interaction{x, y})
+		if n, _ := s.CountInteractions(ctx); n["add_to_playlist"] != 2 {
+			t.Errorf("counts = %v", n)
+		}
+	})
+
+	t.Run("a bad interaction stores nothing and callers cannot change what was stored", func(t *testing.T) {
+		s := newStore()
+		ts := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+		good := domain.Interaction{User: "u", Type: "play", Target: "a", TS: ts, Fields: map[string]string{"k": "v"}}
+		if err := s.UpsertInteractions(ctx, []domain.Interaction{good, {Type: "play", Target: "a"}}); err == nil {
+			t.Fatal("an interaction without a user should be refused")
+		}
+		if n, _ := s.CountInteractions(ctx); len(n) != 0 {
+			t.Errorf("a failed batch left %v behind", n)
+		}
+		_ = s.UpsertInteractions(ctx, []domain.Interaction{good})
+		good.Fields["k"] = "changed"
+		got, _ := s.Interactions(ctx)
+		if got[0].Fields["k"] != "v" {
+			t.Error("changing the input after the write changed the store")
+		}
+		got[0].Fields["k"] = "changed"
+		if again, _ := s.Interactions(ctx); again[0].Fields["k"] != "v" {
+			t.Error("changing a returned interaction changed the store")
 		}
 	})
 }

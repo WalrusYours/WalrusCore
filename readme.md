@@ -53,6 +53,7 @@ only the health endpoints are open. Scoped keys and per-tenant keys are not buil
 | `POST /v1/entities` | Send up to 1000 entities (items, users...) as JSON. Each is checked against the schema; bad ones are listed in `rejected` and the rest are stored. |
 | `PUT /v1/entities/{type}/{id}` | Create or replace one entity: `{"attributes": {...}}`. 201 when new, 200 when replaced, 400 with the reason when it breaks the schema. |
 | `POST /v1/import` | Load a whole catalogue as JSON Lines, one `{"entity", "id", "attributes"}` per line. Reports the first 100 bad lines by number. |
+| `POST /v1/interactions` | Send up to 1000 events (`{"user", "type", "target", "ts", "fields"}`), checked against the schema's `interactions`. `GET /v1/interactions` counts them by type. |
 | `GET /v1/entities`, `GET /v1/entities/{type}/{id}` | How many entities of each type are stored, and one entity back. |
 | `POST /v1/recommenders/{recommender}/recommend` | Recommend with a recommender the schema declares. |
 | `GET /v1/recommend/{user}` | Shorthand for a schema with no `recommenders`: the implicit `default` recommender for a user. Takes `?limit=`, `?preset=` and `?knobs.<id>=<number>`. |
@@ -158,10 +159,23 @@ so the breakdown is the one that produced the score and always adds up to it.
 | 404 | `unknown_recommendation`, `unknown_item` | The `rec_id` expired, or the item was not in that list. |
 | 409 | `schema_missing` | Nothing has been pushed yet. |
 
-> **Status.** Entities are stored (in memory, so they are lost on restart). The recommend request
-> layer is complete: validation, experiments, knob and weight resolution, fallbacks, `rec_id` and
-> explain. Interactions and the scorer are not built yet, so recommend answers with an empty `items`
-> list for now.
+> **Status.** Entities and interactions are stored in memory, so they are lost on restart. Recommend ranks
+> from that store.
+>
+> The ranker supports these so far; anything else in a schema is skipped and logged once, never fatal.
+>
+> - **Signals:** `item_neighbors`, `co_occurrence`, `attribute_target`, `global_count`, `low_exposure`,
+>   `age_decay`, `context_match` and `provided`.
+> - **Candidate sources:** `item_neighbors`, `co_occurrence` and `popular`; with none declared, every item of
+>   the type.
+> - **Constraints:** every form (`in_seed`, attribute `contains`/`equals`/`in`/`gt`/`lt`, `interacted`). A
+>   constraint that reads something the request does not have, such as a `$user` attribute, does not apply.
+> - **Rules:** attribute quotas (`max` per `per` positions).
+> - **Not yet:** user similarity (`user_neighbors`), `trend`, `own_history`, diversity re-ranking,
+>   `blend_user`, and the other rule kinds.
+>
+> Candidates and similarity are computed per request, which is fine for catalogues of a few thousand items.
+> A reason such as "Similar to Thunderstruck" names songs by their `title` attribute when the entity has one.
 
 ## License
 

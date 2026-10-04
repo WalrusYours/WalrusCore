@@ -17,6 +17,8 @@ func (s *Server) routeEntities() {
 	s.mux.HandleFunc("GET /v1/entities/{type}/{id}", s.requireAdmin(s.getEntity))
 	s.mux.HandleFunc("PUT /v1/entities/{type}/{id}", s.requireAdmin(s.putEntity))
 	s.mux.HandleFunc("POST /v1/import", s.requireAdmin(s.importEntities))
+	s.mux.HandleFunc("POST /v1/interactions", s.requireAdmin(s.postInteractions))
+	s.mux.HandleFunc("GET /v1/interactions", s.requireAdmin(s.countInteractions))
 }
 
 // putEntity creates or replaces one entity: 201 when it is new, 200 when it replaced one.
@@ -109,4 +111,29 @@ func entityView(e domain.Entity) any {
 		ID         string                  `json:"id"`
 		Attributes map[string]domain.Value `json:"attributes"`
 	}{e.Type, string(e.ID), e.Attrs}
+}
+
+// postInteractions answers 200 even when some events are rejected, like postEntities.
+func (s *Server) postInteractions(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Interactions []ingest.RawInteraction `json:"interactions"`
+	}
+	if !decodeBody(w, r, &body) {
+		return
+	}
+	res, err := s.ingest.Interactions(r.Context(), body.Interactions)
+	if err != nil {
+		writeIngestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) countInteractions(w http.ResponseWriter, r *http.Request) {
+	counts, err := s.store.CountInteractions(r.Context())
+	if err != nil {
+		writeRecommendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"counts": counts})
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/ingest"
+	"github.com/timurcravtov/walrus/internal/rank"
 	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
 	"github.com/timurcravtov/walrus/internal/store"
@@ -80,6 +81,9 @@ func New(cfg Config, svc *schema.Service, opts ...Option) http.Handler {
 	if o.store == nil {
 		o.store = memory.New()
 	}
+	if o.ranker == nil {
+		o.ranker = rank.New(o.store)
+	}
 	rec := recommend.NewService(svc, o.ranker)
 	if o.profiles != nil {
 		rec.WithProfiles(o.profiles)
@@ -98,6 +102,7 @@ func New(cfg Config, svc *schema.Service, opts ...Option) http.Handler {
 	s.mux.HandleFunc("GET /v1/schema/history", s.requireAdmin(s.schemaHistory))
 
 	s.routeEntities()
+	s.routeKnobs()
 	s.routeRecommend()
 	return s
 }

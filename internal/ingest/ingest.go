@@ -217,6 +217,8 @@ func describe(v any) string {
 	return fmt.Sprintf("%T", v)
 }
 
+func join(s []string) string { return strings.Join(s, ", ") }
+
 func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

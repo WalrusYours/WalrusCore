@@ -176,3 +176,78 @@ func TestRawEntityDecodesFromTheJSONTheAPIReceives(t *testing.T) {
 		t.Error("lists must arrive as []any, which is what value() reads")
 	}
 }
+
+func event(overrides map[string]any) RawInteraction {
+	r := RawInteraction{User: "u1", Type: "add_to_playlist", Target: "a", TS: "2026-09-01T10:00:00Z", Fields: map[string]any{"playlist_id": "p1"}}
+	for k, v := range overrides {
+		switch k {
+		case "user":
+			r.User = v.(string)
+		case "type":
+			r.Type = v.(string)
+		case "target":
+			r.Target = v.(string)
+		case "ts":
+			r.TS = v.(string)
+		case "fields":
+			r.Fields, _ = v.(map[string]any)
+		}
+	}
+	return r
+}
+
+func TestInteractionsAreCheckedAndStored(t *testing.T) {
+	s, st := setup(t)
+	res, err := s.Interactions(context.Background(), []RawInteraction{
+		event(nil),
+		event(map[string]any{"type": "dance"}),
+		event(map[string]any{"user": ""}),
+		event(map[string]any{"target": ""}),
+		event(map[string]any{"ts": "yesterday"}),
+		event(map[string]any{"fields": map[string]any{}}),
+		event(map[string]any{"fields": map[string]any{"playlist_id": "p1", "mood": "x"}}),
+		event(map[string]any{"fields": map[string]any{"playlist_id": 5.0}}),
+		{User: "u2", Type: "play", Target: "b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Accepted != 2 || len(res.Rejected) != 7 {
+		t.Fatalf("%+v", res)
+	}
+	for i, want := range []string{"unknown interaction type", "user must be", "target must be", "not an RFC 3339", `missing field "playlist_id"`, `no field "mood"`, "expected a string"} {
+		if !strings.Contains(res.Rejected[i].Error, want) {
+			t.Errorf("rejection %d = %q, want %q", i, res.Rejected[i].Error, want)
+		}
+	}
+
+	all, _ := st.Interactions(context.Background())
+	if len(all) != 2 || all[0].Fields["playlist_id"] != "p1" || all[0].TS.Year() != 2026 {
+		t.Fatalf("stored %+v", all)
+	}
+	if all[1].TS.IsZero() {
+		t.Error("an event without a timestamp is stamped with its arrival time")
+	}
+
+	again, _ := s.Interactions(context.Background(), []RawInteraction{event(nil)})
+	if again.Accepted != 1 {
+		t.Fatalf("%+v", again)
+	}
+	if n, _ := st.CountInteractions(context.Background()); n["add_to_playlist"] != 1 {
+		t.Errorf("sending the same event again must not duplicate it: %v", n)
+	}
+}
+
+func TestInteractionBatchErrors(t *testing.T) {
+	s, _ := setup(t)
+	for name, raws := range map[string][]RawInteraction{"empty": nil, "too many": make([]RawInteraction, MaxBatch+1)} {
+		if _, err := s.Interactions(context.Background(), raws); err == nil {
+			t.Errorf("%s batch should be refused", name)
+		}
+	}
+	_, err := NewService(schema.NewService(), memory.New()).Interactions(context.Background(), []RawInteraction{event(nil)})
+	var e *Error
+	if !errors.As(err, &e) || e.Code != "schema_missing" {
+		t.Errorf("before a schema: %v", err)
+	}
+}

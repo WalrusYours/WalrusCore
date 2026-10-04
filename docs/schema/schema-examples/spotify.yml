@@ -20,6 +20,7 @@ entities:
   track:
     key: id
     attributes:
+      title:        { type: string, optional: true }   # shown in reasons such as "Sounds like <title>"
       artist_id:    { type: ref, entity: artist }
       album_id:     { type: string }
       genres:       { type: set, of: string }

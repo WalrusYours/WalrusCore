@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/timurcravtov/walrus/internal/domain"
@@ -14,12 +16,18 @@ import (
 type InMemoryStore struct {
 	mu       sync.RWMutex
 	entities map[string]map[domain.EntityID]domain.Entity
+
+	interactions map[string]domain.Interaction // by identity key
+	order        []string                      // keys in arrival order
 }
 
 var _ store.Store = (*InMemoryStore)(nil)
 
 func New() *InMemoryStore {
-	return &InMemoryStore{entities: map[string]map[domain.EntityID]domain.Entity{}}
+	return &InMemoryStore{
+		entities:     map[string]map[domain.EntityID]domain.Entity{},
+		interactions: map[string]domain.Interaction{},
+	}
 }
 
 func clone(e domain.Entity) domain.Entity {
@@ -113,6 +121,83 @@ func (s *InMemoryStore) CountEntities(ctx context.Context) (map[string]int, erro
 		if len(byID) > 0 {
 			out[typ] = len(byID)
 		}
+	}
+	return out, nil
+}
+
+// An interaction is identified by who did what to which item when, plus its fields, so sending
+// the same event again changes nothing.
+func interactionKey(x domain.Interaction) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s|%s|%s|%d", x.User, x.Type, x.Target, x.TS.UnixNano())
+	names := make([]string, 0, len(x.Fields))
+	for k := range x.Fields {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		fmt.Fprintf(&b, "|%s=%s", k, x.Fields[k])
+	}
+	return b.String()
+}
+
+func cloneInteraction(x domain.Interaction) domain.Interaction {
+	x.Fields = maps.Clone(x.Fields)
+	if x.Value != nil {
+		v := *x.Value
+		x.Value = &v
+	}
+	return x
+}
+
+func (s *InMemoryStore) UpsertInteractions(ctx context.Context, interactions []domain.Interaction) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for i, x := range interactions {
+		if x.User == "" || x.Type == "" || x.Target == "" {
+			return fmt.Errorf("store: interaction %d has no user, type or target", i)
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, x := range interactions {
+		k := interactionKey(x)
+		if _, seen := s.interactions[k]; !seen {
+			s.order = append(s.order, k)
+		}
+		s.interactions[k] = cloneInteraction(x)
+	}
+	return nil
+}
+
+// Interactions returns the interactions of the given types in the order they arrived, or all of
+// them when no type is given.
+func (s *InMemoryStore) Interactions(ctx context.Context, types ...string) ([]domain.Interaction, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]domain.Interaction, 0, len(s.order))
+	for _, k := range s.order {
+		x := s.interactions[k]
+		if len(types) == 0 || slices.Contains(types, x.Type) {
+			out = append(out, cloneInteraction(x))
+		}
+	}
+	return out, nil
+}
+
+func (s *InMemoryStore) CountInteractions(ctx context.Context) (map[string]int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]int{}
+	for _, x := range s.interactions {
+		out[x.Type]++
 	}
 	return out, nil
 }

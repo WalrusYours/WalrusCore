@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -183,5 +184,76 @@ func TestImportRunsInChunksAndCapsItsReports(t *testing.T) {
 	}
 	if _, raw = do(t, srv, "GET", "/v1/entities", "", bearer); !strings.Contains(string(raw), `"track":900`) {
 		t.Errorf("counts: %s", raw)
+	}
+}
+
+func TestSendInteractions(t *testing.T) {
+	srv, _ := newRecommendServer(t)
+	body := `{"interactions":[
+{"user":"u1","type":"add_to_playlist","target":"a","ts":"2026-09-01T10:00:00Z","fields":{"playlist_id":"p1"}},
+{"user":"u1","type":"dance","target":"a"}]}`
+
+	res, raw := do(t, srv, "POST", "/v1/interactions", body, bearer)
+	wantError(t, res, raw, 409, "schema_missing")
+
+	pushExample(t, srv, "spotify.yml")
+	res, raw = do(t, srv, "POST", "/v1/interactions", body, bearer)
+	if res.StatusCode != 200 || !strings.Contains(string(raw), `"accepted":1`) || !strings.Contains(string(raw), "unknown interaction type") {
+		t.Fatalf("%d %s", res.StatusCode, raw)
+	}
+	if _, raw = do(t, srv, "GET", "/v1/interactions", "", bearer); !strings.Contains(string(raw), `"add_to_playlist":1`) {
+		t.Errorf("counts: %s", raw)
+	}
+	if res, _ = do(t, srv, "POST", "/v1/interactions", body, nil); res.StatusCode != 401 {
+		t.Errorf("without a key = %d", res.StatusCode)
+	}
+	if res, _ = do(t, srv, "POST", "/v1/interactions", `{"interactions":[]}`, bearer); res.StatusCode != 400 {
+		t.Errorf("empty = %d", res.StatusCode)
+	}
+}
+
+func TestSchemaKnobsDescribeThePanel(t *testing.T) {
+	srv, _ := newRecommendServer(t)
+	res, raw := do(t, srv, "GET", "/v1/schema/knobs", "", bearer)
+	wantError(t, res, raw, 409, "schema_missing")
+	if res, _ = do(t, srv, "GET", "/v1/schema/knobs", "", nil); res.StatusCode != 401 {
+		t.Errorf("without a key = %d", res.StatusCode)
+	}
+
+	pushExample(t, srv, "spotify.yml")
+	res, raw = do(t, srv, "GET", "/v1/schema/knobs", "", bearer)
+	var out struct {
+		Knobs []struct {
+			ID, Kind, Label, Group string
+			Min, Max, Default      float64
+			Recommenders           []string
+		}
+		Presets []struct {
+			ID    string
+			Knobs map[string]float64
+		}
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || res.StatusCode != 200 {
+		t.Fatalf("%d %s", res.StatusCode, raw)
+	}
+	byID := map[string]int{}
+	for i, k := range out.Knobs {
+		byID[k.ID] = i
+	}
+	vibe := out.Knobs[byID["vibe_vs_branch_out"]]
+	if vibe.Kind != "slider" || vibe.Group != "Playlist suggestions" || vibe.Default != 0.3 || vibe.Min != 0 || vibe.Max != 1 ||
+		len(vibe.Recommenders) != 1 || vibe.Recommenders[0] != "playlist_add" {
+		t.Errorf("vibe_vs_branch_out = %+v", vibe)
+	}
+	if mix := out.Knobs[byID["mix_in_my_taste"]]; mix.Kind != "toggle" || mix.Default != 1 {
+		t.Errorf("mix_in_my_taste = %+v", mix)
+	}
+	// a feed knob is offered by the feed recommender, not by playlist_add
+	if taste := out.Knobs[byID["taste_vs_crowd"]]; slices.Contains(taste.Recommenders, "playlist_add") || !slices.Contains(taste.Recommenders, "home") {
+		t.Errorf("taste_vs_crowd offered by %v", taste.Recommenders)
+	}
+	// defaults include the default preset (taste_vs_crowd is 0.5 there)
+	if out.Knobs[byID["taste_vs_crowd"]].Default != 0.5 || len(out.Presets) == 0 {
+		t.Errorf("presets = %+v", out.Presets)
 	}
 }

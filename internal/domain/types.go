@@ -20,6 +20,7 @@ type Interaction struct {
 	Target EntityID
 	Value  *float64
 	TS     time.Time
+	Fields map[string]string
 }
 
 type Edge struct {
