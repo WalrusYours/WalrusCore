@@ -8,6 +8,8 @@
 
 [Website](https://walrusyours.github.io) • [Docs](https://walrusyours.github.io/docs) • [Instalation Guide](https://walrusyours.github.io/install)
 
+[![CI](https://github.com/WalrusYours/WalrusCore/actions/workflows/ci.yml/badge.svg)](https://github.com/WalrusYours/WalrusCore/actions/workflows/ci.yml)
+
 </div>
 
 
