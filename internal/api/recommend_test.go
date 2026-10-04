@@ -10,6 +10,7 @@ import (
 	"github.com/timurcravtov/walrus/internal/domain"
 	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
+	"github.com/timurcravtov/walrus/internal/store/memory"
 )
 
 // stubRanker returns a fixed list so the HTTP layer can be tested without a store.
@@ -33,7 +34,7 @@ func newRecommendServer(t *testing.T) (*httptest.Server, *stubRanker) {
 	h := New(Config{
 		AdminKey: adminKey, InstanceID: "abc123", InstanceName: "test", Version: "t",
 		FailDelay: -1, MaxSchemaBytes: 64 << 10,
-	}, schema.NewService(), WithRanker(ranker))
+	}, Deps{Schema: schema.NewService(), Store: memory.New(), Ranker: ranker})
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return srv, ranker

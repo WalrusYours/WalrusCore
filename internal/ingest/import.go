@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"slices"
+
+	"github.com/timurcravtov/walrus/internal/apperr"
 )
 
 const (
@@ -38,7 +39,7 @@ func (s *Service) One(ctx context.Context, typ, id string, attrs map[string]any)
 		return err
 	}
 	if len(res.Rejected) > 0 {
-		return &Error{http.StatusBadRequest, "validation_error", res.Rejected[0].Error}
+		return apperr.New(http.StatusBadRequest, "validation_error", "%s", res.Rejected[0].Error)
 	}
 	return nil
 }
@@ -48,7 +49,7 @@ func (s *Service) One(ctx context.Context, typ, id string, attrs map[string]any)
 // line is reported with its number and does not stop the import.
 func (s *Service) Import(ctx context.Context, r io.Reader) (*ImportResult, error) {
 	if s.schema.Compiled() == nil {
-		return nil, &Error{http.StatusConflict, "schema_missing", "no schema has been pushed yet"}
+		return nil, apperr.New(http.StatusConflict, "schema_missing", "no schema has been pushed yet")
 	}
 	res := &ImportResult{Reports: []LineRejection{}}
 	report := func(l LineRejection) {
@@ -99,7 +100,7 @@ func (s *Service) Import(ctx context.Context, r io.Reader) (*ImportResult, error
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, &Error{http.StatusBadRequest, "validation_error", fmt.Sprintf("could not read the body: %v", err)}
+		return nil, apperr.New(http.StatusBadRequest, "validation_error", "could not read the body: %v", err)
 	}
 	if err := flush(); err != nil {
 		return nil, err

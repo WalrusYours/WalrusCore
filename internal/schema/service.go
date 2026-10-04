@@ -28,7 +28,9 @@ type Result struct {
 	Diff         DiffResult `json:"diff"`
 	Version      int        `json:"version,omitempty"`
 	NeedsConfirm bool       `json:"needsConfirm,omitempty"`
-	Message      string     `json:"message"`
+	// Warnings name what the schema asks for that the engine does not do yet. They never block a push.
+	Warnings []Issue `json:"warnings,omitempty"`
+	Message  string  `json:"message"`
 }
 
 // Service keeps the versions in memory and the active one compiled.

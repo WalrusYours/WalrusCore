@@ -390,7 +390,7 @@ func (v *validator) similarity() {
 		for i, t := range v.s.Similarity[et] {
 			p := fmt.Sprintf("similarity.%s[%d]", et, i)
 			if !t.Metric.Valid() {
-				v.add(p+".metric", "metric must be one of jaccard, cosine, equals, log_ratio")
+				v.add(p+".metric", "metric must be one of jaccard, cosine, equals, log_ratio, closeness")
 			}
 			if len(t.Between) > 0 {
 				v.add(p+".between", "between belongs to similarity.cross")
@@ -410,6 +410,14 @@ func (v *validator) similarity() {
 				}
 				if t.Weight <= 0 || math.IsNaN(t.Weight) {
 					v.add(p+".weight", "weight must be greater than 0")
+				}
+				if t.Metric == MetricCloseness {
+					switch a := e.Attributes[t.On[0]]; {
+					case len(t.On) != 1:
+						v.add(p+".on", "closeness compares one number; list one attribute, or use cosine for a group")
+					case a.Type != TypeFloat && a.Type != TypeInt:
+						v.add(p+".on", "closeness needs a float or int attribute, %q is %s", t.On[0], a.Type)
+					}
 				}
 				id := t.TermID()
 				v.ident(p+".id", id)

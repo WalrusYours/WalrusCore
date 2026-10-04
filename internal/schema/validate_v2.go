@@ -384,6 +384,7 @@ func (v *validator) recommenders() {
 	for _, name := range sortedKeys(v.s.Recommenders) {
 		r := v.s.Recommenders[name]
 		p := "recommenders." + name
+		seed := r.EffectiveSeed()
 		v.ident(p, name)
 		v.text(p+".label", r.Label, false)
 		if len(r.For) == 0 {
@@ -394,206 +395,243 @@ func (v *validator) recommenders() {
 				v.add(p+".for", "%q is not a declared entity", e)
 			}
 		}
-		seed := r.EffectiveSeed()
-		if r.Seed != "" && !slices.Contains(Seeds, r.Seed) {
-			v.add(p+".seed", "seed must be one of %s", strings.Join(Seeds, ", "))
-		}
-		if r.SeedAggregate != "" {
-			if seed != SeedItems && seed != SeedSession {
-				v.add(p+".seed_aggregate", "seed_aggregate applies to items and session seeds")
-			} else if r.SeedAggregate != "mean" && r.SeedAggregate != "max" {
-				v.add(p+".seed_aggregate", "seed_aggregate must be mean or max")
-			}
-		}
-		if r.BlendUser != nil {
-			if !slices.Contains(itemSeeds, seed) {
-				v.add(p+".blend_user", "blend_user applies to item, items and session seeds")
-			} else if *r.BlendUser < 0 || *r.BlendUser > 1 {
-				v.add(p+".blend_user", "blend_user must be in [0, 1]")
-			}
-		}
-		for i, c := range r.Candidates {
-			cp := fmt.Sprintf("%s.candidates[%d]", p, i)
-			if !slices.Contains(CandidateSources, c.Source) {
-				v.add(cp+".source", "source must be one of %s", strings.Join(CandidateSources, ", "))
-				continue
-			}
-			if want, needs := candidateSignalType[c.Source]; needs {
-				sg, ok := v.s.Signals[c.Signal]
-				if !ok || sg.Type != want {
-					v.add(cp+".signal", "source %s needs signal: <a %s signal>", c.Source, want)
-				}
-			} else if c.Signal != "" {
-				v.add(cp+".signal", "source %s takes no signal", c.Source)
-			}
-			if c.Cap < 0 {
-				v.add(cp+".cap", "cap must not be negative")
-			}
-			switch c.Source {
-			case "co_occurrence":
-				if seed == SeedNone {
-					v.add(cp+".source", "co_occurrence needs something to start from: a user (their recent items), an item, items or a session")
-				}
-			case "sequence":
-				if !slices.Contains(itemSeeds, seed) {
-					v.add(cp+".source", "sequence needs an item, items or session seed")
-				}
-			case "user_neighbors":
-				if seed != SeedUser && seed != SeedUsers {
-					v.add(cp+".source", "user_neighbors needs a user or users seed")
-				}
-			case "item_neighbors":
-				if seed == SeedNone {
-					v.add(cp+".source", "item_neighbors needs something to be similar to; seed none has nothing")
-				}
-			}
-		}
-		used := r.Signals
-		if len(used) == 0 {
-			used = v.s.SignalIDs()
-		}
-		for _, sid := range r.Signals {
-			sg, ok := v.s.Signals[sid]
-			if !ok {
-				v.add(p+".signals", "%q is not a declared signal", sid)
-				continue
-			}
-			ents := v.signalEntities(sg)
-			if len(sg.For) > 0 && !slices.ContainsFunc(r.For, func(e string) bool { return slices.Contains(ents, e) }) {
-				v.add(p+".signals", "%s scores %s, none of which %s returns", sid, strings.Join(sg.For, ", "), name)
-			}
-			switch sg.Type {
-			case "co_occurrence":
-				// With a user seed it starts from the user's own recent items: bought after.
-				if seed == SeedNone {
-					v.add(p+".signals", "%s (co_occurrence) needs something to start from; seed none has nothing", sid)
-				}
-			case "sequence":
-				if !slices.Contains(itemSeeds, seed) {
-					v.add(p+".signals", "%s (sequence) needs an item, items or session seed", sid)
-				}
-			case "mutual_connections":
-				if seed != SeedUser || !slices.Contains(r.For, "user") {
-					v.add(p+".signals", "%s (mutual_connections) recommends users to a user: for: [user], seed: user", sid)
-				}
-			case "attribute_target":
-				if t, _ := sg.Params["target"].(string); strings.HasPrefix(t, "seed.") && seed != SeedItems && seed != SeedSession {
-					v.add(p+".signals", "%s aims at %s, which needs an items or session seed", sid, t)
-				}
-			}
-		}
-		for _, sid := range sortedKeys(r.Weights) {
-			wp := p + ".weights." + sid
-			if !slices.Contains(used, sid) {
-				v.add(wp, "%q is not a signal this recommender uses", sid)
-			}
-			w := r.Weights[sid]
-			if _, isConst := w.Constant(); !isConst {
-				allowed := refUser | refContext | refProfile
-				if slices.Contains(itemSeeds, seed) {
-					allowed |= refSeed
-				}
-				v.exprRefs(wp, string(w), r.For, allowed)
-			}
-		}
+		v.recommenderSeed(p, name, r, seed)
+		v.recommenderCandidates(p, name, r, seed)
+		v.recommenderSignals(p, name, r, seed)
+		v.recommenderWeights(p, name, r, seed)
 		for _, cid := range r.Constraints {
 			if !constraintIDs[cid] {
 				v.add(p+".constraints", "%q is not the id of a constraint", cid)
 			}
 		}
-		maxLimit := 100
-		if r.Limit != nil {
-			if r.Limit.Default < 1 || r.Limit.Max < r.Limit.Default {
-				v.add(p+".limit", "limit needs default ≥ 1 and max ≥ default")
-			}
-			maxLimit = r.Limit.Max
+		v.recommenderRules(p, r, ruleIDs)
+		v.recommenderShape(p, name, r, seed)
+		v.recommenderFallbacks(p, name, r, seed)
+	}
+	v.fallbackCycles()
+}
+
+// recommenderSeed checks the seed type and the keys that only some seeds take.
+func (v *validator) recommenderSeed(p, name string, r RecommenderSpec, seed string) {
+	if r.Seed != "" && !slices.Contains(Seeds, r.Seed) {
+		v.add(p+".seed", "seed must be one of %s", strings.Join(Seeds, ", "))
+	}
+	if r.SeedAggregate != "" {
+		if seed != SeedItems && seed != SeedSession {
+			v.add(p+".seed_aggregate", "seed_aggregate applies to items and session seeds")
+		} else if r.SeedAggregate != "mean" && r.SeedAggregate != "max" {
+			v.add(p+".seed_aggregate", "seed_aggregate must be mean or max")
 		}
-		for _, rid := range r.Rules {
-			rule, ok := ruleIDs[rid]
-			if !ok {
-				v.add(p+".rules", "%q is not a declared rule", rid)
-				continue
+	}
+	if r.BlendUser != nil {
+		if !slices.Contains(itemSeeds, seed) {
+			v.add(p+".blend_user", "blend_user applies to item, items and session seeds")
+		} else if *r.BlendUser < 0 || *r.BlendUser > 1 {
+			v.add(p+".blend_user", "blend_user must be in [0, 1]")
+		}
+	}
+}
+
+// recommenderCandidates checks each candidate source, and that the seed can feed it.
+func (v *validator) recommenderCandidates(p, name string, r RecommenderSpec, seed string) {
+	for i, c := range r.Candidates {
+		cp := fmt.Sprintf("%s.candidates[%d]", p, i)
+		if !slices.Contains(CandidateSources, c.Source) {
+			v.add(cp+".source", "source must be one of %s", strings.Join(CandidateSources, ", "))
+			continue
+		}
+		if want, needs := candidateSignalType[c.Source]; needs {
+			sg, ok := v.s.Signals[c.Signal]
+			if !ok || sg.Type != want {
+				v.add(cp+".signal", "source %s needs signal: <a %s signal>", c.Source, want)
 			}
-			if rule.Place != nil && len(rule.Place.At) > 0 && rule.Place.At[len(rule.Place.At)-1] > maxLimit {
-				v.add(p+".rules", "rule %s places items at %d, past this recommender's limit of %d", rid, rule.Place.At[len(rule.Place.At)-1], maxLimit)
+		} else if c.Signal != "" {
+			v.add(cp+".signal", "source %s takes no signal", c.Source)
+		}
+		if c.Cap < 0 {
+			v.add(cp+".cap", "cap must not be negative")
+		}
+		switch c.Source {
+		case "co_occurrence":
+			if seed == SeedNone {
+				v.add(cp+".source", "co_occurrence needs something to start from: a user (their recent items), an item, items or a session")
+			}
+		case "sequence":
+			if !slices.Contains(itemSeeds, seed) {
+				v.add(cp+".source", "sequence needs an item, items or session seed")
+			}
+		case "user_neighbors":
+			if seed != SeedUser && seed != SeedUsers {
+				v.add(cp+".source", "user_neighbors needs a user or users seed")
+			}
+		case "item_neighbors":
+			if seed == SeedNone {
+				v.add(cp+".source", "item_neighbors needs something to be similar to; seed none has nothing")
 			}
 		}
-		if rr := r.Rerank; rr != nil && rr.Diversity != nil {
-			v.attrIn(p+".rerank.diversity.on", r.For, rr.Diversity.On)
-			if rr.Diversity.Lambda < 0 || rr.Diversity.Lambda > 1 {
-				v.add(p+".rerank.diversity.lambda", "lambda must be in [0, 1]")
+	}
+}
+
+// recommenderSignals checks that each signal exists, scores what the recommender returns, and fits
+// its seed.
+func (v *validator) recommenderSignals(p, name string, r RecommenderSpec, seed string) {
+	for _, sid := range r.Signals {
+		sg, ok := v.s.Signals[sid]
+		if !ok {
+			v.add(p+".signals", "%q is not a declared signal", sid)
+			continue
+		}
+		ents := v.signalEntities(sg)
+		if len(sg.For) > 0 && !slices.ContainsFunc(r.For, func(e string) bool { return slices.Contains(ents, e) }) {
+			v.add(p+".signals", "%s scores %s, none of which %s returns", sid, strings.Join(sg.For, ", "), name)
+		}
+		switch sg.Type {
+		case "co_occurrence":
+			// With a user seed it starts from the user's own recent items: bought after.
+			if seed == SeedNone {
+				v.add(p+".signals", "%s (co_occurrence) needs something to start from; seed none has nothing", sid)
+			}
+		case "sequence":
+			if !slices.Contains(itemSeeds, seed) {
+				v.add(p+".signals", "%s (sequence) needs an item, items or session seed", sid)
+			}
+		case "mutual_connections":
+			if seed != SeedUser || !slices.Contains(r.For, "user") {
+				v.add(p+".signals", "%s (mutual_connections) recommends users to a user: for: [user], seed: user", sid)
+			}
+		case "attribute_target":
+			if t, _ := sg.Params["target"].(string); strings.HasPrefix(t, "seed.") && seed != SeedItems && seed != SeedSession {
+				v.add(p+".signals", "%s aims at %s, which needs an items or session seed", sid, t)
 			}
 		}
-		if m := r.Mix; m != nil {
-			switch {
-			case len(r.For) < 2:
-				v.add(p+".mix", "mix applies when a recommender returns several entity types")
-			case m.By == "score":
-				if len(m.Shares) > 0 {
-					v.add(p+".mix.shares", "shares apply to by: entity")
-				}
-			case m.By == "entity":
-				sum := 0.0
-				for _, e := range sortedKeys(m.Shares) {
-					if !slices.Contains(r.For, e) {
-						v.add(p+".mix.shares", "%q is not in for", e)
-					}
-					if m.Shares[e] <= 0 || m.Shares[e] > 1 {
-						v.add(p+".mix.shares."+e, "a share is in (0, 1]")
-					}
-					sum += m.Shares[e]
-				}
-				if len(m.Shares) != len(r.For) || math.Abs(sum-1) > 1e-9 {
-					v.add(p+".mix.shares", "give every entity in for a share, summing to 1")
-				}
-			default:
-				v.add(p+".mix.by", "by must be entity or score")
-			}
+	}
+}
+
+// recommenderWeights checks the recommender's own weights: signals it uses, expressions over what
+// its seed allows.
+func (v *validator) recommenderWeights(p, name string, r RecommenderSpec, seed string) {
+	used := r.Signals
+	if len(used) == 0 {
+		used = v.s.SignalIDs()
+	}
+	for _, sid := range sortedKeys(r.Weights) {
+		wp := p + ".weights." + sid
+		if !slices.Contains(used, sid) {
+			v.add(wp, "%q is not a signal this recommender uses", sid)
 		}
-		for _, kid := range r.Knobs {
-			if _, ok := v.s.Knob(kid); !ok {
-				v.add(p+".knobs", "%q is not a declared knob", kid)
-			}
-		}
-		for i, f := range r.Fallback {
-			fp := fmt.Sprintf("%s.fallback[%d]", p, i)
+		w := r.Weights[sid]
+		if _, isConst := w.Constant(); !isConst {
 			allowed := refUser | refContext | refProfile
 			if slices.Contains(itemSeeds, seed) {
 				allowed |= refSeed
 			}
-			if f.When == "" {
-				v.add(fp+".when", "when is required")
-			} else {
-				v.exprRefs(fp+".when", f.When, r.For, allowed)
-			}
-			other, ok := v.s.Recommenders[f.Use]
-			switch {
-			case !ok:
-				v.add(fp+".use", "%q is not a declared recommender", f.Use)
-			case f.Use == name:
-				v.add(fp+".use", "a recommender cannot fall back to itself")
-			case !slices.ContainsFunc(other.For, func(e string) bool { return slices.Contains(r.For, e) }):
-				v.add(fp+".use", "%s returns %s, nothing %s returns", f.Use, strings.Join(other.For, ", "), name)
-			}
-		}
-		if g := r.Group; g != nil {
-			if seed != SeedUsers {
-				v.add(p+".group", "group applies to seed: users")
-			}
-			if !slices.Contains([]string{"average", "least_misery", "most_pleasure"}, g.Aggregate) {
-				v.add(p+".group.aggregate", "aggregate must be average, least_misery or most_pleasure")
-			}
-		}
-		if rc := r.Reciprocal; rc != nil {
-			if _, ok := v.s.Recommenders[rc.Recommender]; !ok || rc.Recommender == name {
-				v.add(p+".reciprocal.recommender", "%q must name another declared recommender", rc.Recommender)
-			}
-			if !slices.Contains([]string{"harmonic", "min", "product"}, rc.Combine) {
-				v.add(p+".reciprocal.combine", "combine must be harmonic, min or product")
-			}
+			v.exprRefs(wp, string(w), r.For, allowed)
 		}
 	}
-	v.fallbackCycles()
+}
+
+// recommenderRules checks that each rule exists and fits the recommender's limit.
+func (v *validator) recommenderRules(p string, r RecommenderSpec, ruleIDs map[string]Rule) {
+	maxLimit := 100
+	if r.Limit != nil {
+		if r.Limit.Default < 1 || r.Limit.Max < r.Limit.Default {
+			v.add(p+".limit", "limit needs default ≥ 1 and max ≥ default")
+		}
+		maxLimit = r.Limit.Max
+	}
+	for _, rid := range r.Rules {
+		rule, ok := ruleIDs[rid]
+		if !ok {
+			v.add(p+".rules", "%q is not a declared rule", rid)
+			continue
+		}
+		if rule.Place != nil && len(rule.Place.At) > 0 && rule.Place.At[len(rule.Place.At)-1] > maxLimit {
+			v.add(p+".rules", "rule %s places items at %d, past this recommender's limit of %d", rid, rule.Place.At[len(rule.Place.At)-1], maxLimit)
+		}
+	}
+}
+
+// recommenderShape checks re-ranking, mixing, knobs, groups and reciprocal matching.
+func (v *validator) recommenderShape(p, name string, r RecommenderSpec, seed string) {
+	if rr := r.Rerank; rr != nil && rr.Diversity != nil {
+		v.attrIn(p+".rerank.diversity.on", r.For, rr.Diversity.On)
+		if rr.Diversity.Lambda < 0 || rr.Diversity.Lambda > 1 {
+			v.add(p+".rerank.diversity.lambda", "lambda must be in [0, 1]")
+		}
+	}
+	if m := r.Mix; m != nil {
+		switch {
+		case len(r.For) < 2:
+			v.add(p+".mix", "mix applies when a recommender returns several entity types")
+		case m.By == "score":
+			if len(m.Shares) > 0 {
+				v.add(p+".mix.shares", "shares apply to by: entity")
+			}
+		case m.By == "entity":
+			sum := 0.0
+			for _, e := range sortedKeys(m.Shares) {
+				if !slices.Contains(r.For, e) {
+					v.add(p+".mix.shares", "%q is not in for", e)
+				}
+				if m.Shares[e] <= 0 || m.Shares[e] > 1 {
+					v.add(p+".mix.shares."+e, "a share is in (0, 1]")
+				}
+				sum += m.Shares[e]
+			}
+			if len(m.Shares) != len(r.For) || math.Abs(sum-1) > 1e-9 {
+				v.add(p+".mix.shares", "give every entity in for a share, summing to 1")
+			}
+		default:
+			v.add(p+".mix.by", "by must be entity or score")
+		}
+	}
+	for _, kid := range r.Knobs {
+		if _, ok := v.s.Knob(kid); !ok {
+			v.add(p+".knobs", "%q is not a declared knob", kid)
+		}
+	}
+	if g := r.Group; g != nil {
+		if seed != SeedUsers {
+			v.add(p+".group", "group applies to seed: users")
+		}
+		if !slices.Contains([]string{"average", "least_misery", "most_pleasure"}, g.Aggregate) {
+			v.add(p+".group.aggregate", "aggregate must be average, least_misery or most_pleasure")
+		}
+	}
+	if rc := r.Reciprocal; rc != nil {
+		if _, ok := v.s.Recommenders[rc.Recommender]; !ok || rc.Recommender == name {
+			v.add(p+".reciprocal.recommender", "%q must name another declared recommender", rc.Recommender)
+		}
+		if !slices.Contains([]string{"harmonic", "min", "product"}, rc.Combine) {
+			v.add(p+".reciprocal.combine", "combine must be harmonic, min or product")
+		}
+	}
+}
+
+// recommenderFallbacks checks each fallback: a condition over what the seed allows, and another
+// recommender that returns the same kind of thing.
+func (v *validator) recommenderFallbacks(p, name string, r RecommenderSpec, seed string) {
+	for i, f := range r.Fallback {
+		fp := fmt.Sprintf("%s.fallback[%d]", p, i)
+		allowed := refUser | refContext | refProfile
+		if slices.Contains(itemSeeds, seed) {
+			allowed |= refSeed
+		}
+		if f.When == "" {
+			v.add(fp+".when", "when is required")
+		} else {
+			v.exprRefs(fp+".when", f.When, r.For, allowed)
+		}
+		other, ok := v.s.Recommenders[f.Use]
+		switch {
+		case !ok:
+			v.add(fp+".use", "%q is not a declared recommender", f.Use)
+		case f.Use == name:
+			v.add(fp+".use", "a recommender cannot fall back to itself")
+		case !slices.ContainsFunc(other.For, func(e string) bool { return slices.Contains(r.For, e) }):
+			v.add(fp+".use", "%s returns %s, nothing %s returns", f.Use, strings.Join(other.For, ", "), name)
+		}
+	}
 }
 
 // fallbackCycles reports a chain of fallbacks that comes back to where it started.

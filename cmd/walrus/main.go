@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/api"
+	"github.com/timurcravtov/walrus/internal/rank"
 	"github.com/timurcravtov/walrus/internal/schema"
+	"github.com/timurcravtov/walrus/internal/store/memory"
 )
 
 const version = "0.0.0-dev"
@@ -32,6 +34,12 @@ func newInstanceID() string {
 	return hex.EncodeToString(b)
 }
 
+// wire picks the engine's parts: the in-memory store and the ranker that reads it.
+func wire() api.Deps {
+	st := memory.New()
+	return api.Deps{Schema: schema.NewService(), Store: st, Ranker: rank.New(st)}
+}
+
 func main() {
 	listen, err := resolveListen(os.Getenv)
 	if err != nil {
@@ -50,7 +58,7 @@ func main() {
 	}
 	srv := &http.Server{
 		Addr:              listen.Addr,
-		Handler:           api.New(cfg, schema.NewService()),
+		Handler:           api.New(cfg, wire()),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

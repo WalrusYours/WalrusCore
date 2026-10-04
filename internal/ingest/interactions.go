@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/timurcravtov/walrus/internal/apperr"
 	"github.com/timurcravtov/walrus/internal/domain"
 	"github.com/timurcravtov/walrus/internal/schema"
 )
@@ -26,13 +27,13 @@ type RawInteraction struct {
 func (s *Service) Interactions(ctx context.Context, raws []RawInteraction) (*Result, error) {
 	c := s.schema.Compiled()
 	if c == nil {
-		return nil, &Error{http.StatusConflict, "schema_missing", "no schema has been pushed yet"}
+		return nil, apperr.New(http.StatusConflict, "schema_missing", "no schema has been pushed yet")
 	}
 	if len(raws) == 0 {
-		return nil, &Error{http.StatusBadRequest, "validation_error", "send at least one interaction"}
+		return nil, apperr.New(http.StatusBadRequest, "validation_error", "send at least one interaction")
 	}
 	if len(raws) > MaxBatch {
-		return nil, &Error{http.StatusBadRequest, "validation_error", fmt.Sprintf("a batch holds at most %d interactions, got %d", MaxBatch, len(raws))}
+		return nil, apperr.New(http.StatusBadRequest, "validation_error", "a batch holds at most %d interactions, got %d", MaxBatch, len(raws))
 	}
 
 	now := time.Now().UTC()

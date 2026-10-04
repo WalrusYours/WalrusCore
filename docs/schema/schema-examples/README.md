@@ -100,7 +100,7 @@ similarity:
 |------|---------|
 | `on` | The attribute (or list of attributes) to compare. |
 | `via: interactions` | Compare users by their interaction history instead of by attributes. Use it for `user`. |
-| `metric` | `equals` (same value), `jaccard` (overlap of two sets), `cosine` (angle between vectors or number lists), `log_ratio` (closeness of two positive numbers such as prices). |
+| `metric` | `equals` (same value), `jaccard` (overlap of two sets), `cosine` (angle between vectors or number lists), `log_ratio` (closeness of two positive numbers such as prices), `closeness` (one number: 1 minus the gap as a share of the whole range, for a feature like energy or tempo). |
 | `weight` | Share of this term in the combined similarity. Must be above 0 for `on` terms. |
 
 A term uses `on` or `via`, never both.

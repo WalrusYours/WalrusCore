@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/timurcravtov/walrus/internal/rank"
 	"github.com/timurcravtov/walrus/internal/schema"
+	"github.com/timurcravtov/walrus/internal/store/memory"
 )
 
 const adminKey = "test-admin-key"
@@ -20,10 +22,16 @@ func newTestServer(t *testing.T) *httptest.Server {
 	h := New(Config{
 		AdminKey: adminKey, InstanceID: "abc123", InstanceName: "test", Version: "t",
 		FailDelay: -1, MaxSchemaBytes: 64 << 10,
-	}, schema.NewService())
+	}, realDeps())
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// realDeps is the engine as cmd/walrus wires it: the in-memory store and the real ranker.
+func realDeps() Deps {
+	st := memory.New()
+	return Deps{Schema: schema.NewService(), Store: st, Ranker: rank.New(st)}
 }
 
 func example(t *testing.T, name string) string {
@@ -215,5 +223,28 @@ func TestEveryExampleCanBePushedAsItsOwnTenantSchema(t *testing.T) {
 		if r := decode(t, body); res.StatusCode != 200 || !r.OK {
 			t.Errorf("%s = %d %s", filepath.Base(f), res.StatusCode, body)
 		}
+	}
+}
+
+func TestASchemaPushWarnsAboutWhatIsNotBuiltYet(t *testing.T) {
+	srv := newTestServer(t)
+	res, body := do(t, srv, "PUT", "/v1/schema", example(t, "spotify.yml"), bearer)
+	r := decode(t, body)
+	if res.StatusCode != 200 || !r.OK {
+		t.Fatalf("%d %s", res.StatusCode, body)
+	}
+	found := false
+	for _, w := range r.Warnings {
+		if w.Path == "signals.trending.type" && strings.Contains(w.Message, "not ranked yet") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no warning for the trend signal: %+v", r.Warnings)
+	}
+
+	res, body = do(t, srv, "PUT", "/v1/schema?confirm_breaking=true", example(t, "playlist.yml"), bearer)
+	if r := decode(t, body); res.StatusCode != 200 || len(r.Warnings) != 0 {
+		t.Errorf("playlist.yml uses only built features: %d %+v", res.StatusCode, r.Warnings)
 	}
 }

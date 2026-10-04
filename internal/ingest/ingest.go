@@ -3,12 +3,14 @@ package ingest
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/timurcravtov/walrus/internal/apperr"
 	"github.com/timurcravtov/walrus/internal/domain"
 	"github.com/timurcravtov/walrus/internal/schema"
 	"github.com/timurcravtov/walrus/internal/store"
@@ -19,13 +21,8 @@ const (
 	maxIDLen = 200
 )
 
-type Error struct {
-	Status  int
-	Code    string
-	Message string
-}
-
-func (e *Error) Error() string { return e.Code + ": " + e.Message }
+// Error is the error a batch fails with as a whole: an HTTP status, a code and a message.
+type Error = apperr.Error
 
 type Raw struct {
 	Entity     string         `json:"entity"`
@@ -59,13 +56,13 @@ func NewService(sch *schema.Service, st store.Store) *Service {
 func (s *Service) Entities(ctx context.Context, raws []Raw) (*Result, error) {
 	c := s.schema.Compiled()
 	if c == nil {
-		return nil, &Error{http.StatusConflict, "schema_missing", "no schema has been pushed yet"}
+		return nil, apperr.New(http.StatusConflict, "schema_missing", "no schema has been pushed yet")
 	}
 	if len(raws) == 0 {
-		return nil, &Error{http.StatusBadRequest, "validation_error", "send at least one entity"}
+		return nil, apperr.New(http.StatusBadRequest, "validation_error", "send at least one entity")
 	}
 	if len(raws) > MaxBatch {
-		return nil, &Error{http.StatusBadRequest, "validation_error", fmt.Sprintf("a batch holds at most %d entities, got %d", MaxBatch, len(raws))}
+		return nil, apperr.New(http.StatusBadRequest, "validation_error", "a batch holds at most %d entities, got %d", MaxBatch, len(raws))
 	}
 
 	res := &Result{Rejected: []Rejection{}}
@@ -219,11 +216,4 @@ func describe(v any) string {
 
 func join(s []string) string { return strings.Join(s, ", ") }
 
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
-}
+func sortedKeys[V any](m map[string]V) []string { return slices.Sorted(maps.Keys(m)) }

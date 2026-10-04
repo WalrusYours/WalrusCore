@@ -2,6 +2,7 @@ package recommend
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"time"
@@ -14,12 +15,12 @@ import (
 // validates entities: unknown fields and wrong types are rejected, a field that is not optional
 // is required, and derived fields (hour, weekday, month) are filled from the request time (UTC)
 // and cannot be sent.
-func checkContext(sch *schema.Schema, in map[string]any, now time.Time) (map[string]domain.Value, *Error) {
+func checkContext(sch *schema.Schema, in map[string]any, now time.Time) (map[string]domain.Value, error) {
 	out := make(map[string]domain.Value, len(sch.Context))
-	for _, name := range sortedNames(in) {
+	for _, name := range slices.Sorted(maps.Keys(in)) {
 		f, ok := sch.Context[name]
 		if !ok {
-			return nil, fail(400, "unknown_context_field", "context.%s is not declared in the schema (declared: %v)", name, sortedNames(sch.Context))
+			return nil, fail(400, "unknown_context_field", "context.%s is not declared in the schema (declared: %v)", name, slices.Sorted(maps.Keys(sch.Context)))
 		}
 		if f.Derive != "" {
 			return nil, fail(400, "validation_error", "context.%s is derived from the request time and cannot be sent", name)
@@ -30,7 +31,7 @@ func checkContext(sch *schema.Schema, in map[string]any, now time.Time) (map[str
 		}
 		out[name] = v
 	}
-	for _, name := range sortedNames(sch.Context) {
+	for _, name := range slices.Sorted(maps.Keys(sch.Context)) {
 		f := sch.Context[name]
 		switch {
 		case f.Derive != "":

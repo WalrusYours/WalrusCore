@@ -5,6 +5,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/schema/expr"
@@ -34,6 +35,8 @@ type Compiled struct {
 
 	Interactions map[string]Interaction
 	Computers    map[string]*Computer // per entity type
+
+	exprs sync.Map // source -> *expr.Expr, see Expr
 }
 
 type Signal struct {

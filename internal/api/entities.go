@@ -33,12 +33,12 @@ func (s *Server) putEntity(w http.ResponseWriter, r *http.Request) {
 	_, err := s.store.Entity(r.Context(), typ, domain.EntityID(id))
 	existed := err == nil
 	if err := s.ingest.One(r.Context(), typ, id, body.Attributes); err != nil {
-		writeIngestError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	e, err := s.store.Entity(r.Context(), typ, domain.EntityID(id))
 	if err != nil {
-		writeRecommendError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	status := http.StatusCreated
@@ -52,19 +52,10 @@ func (s *Server) putEntity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) importEntities(w http.ResponseWriter, r *http.Request) {
 	res, err := s.ingest.Import(r.Context(), http.MaxBytesReader(w, r.Body, maxImportBytes))
 	if err != nil {
-		writeIngestError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
-}
-
-func writeIngestError(w http.ResponseWriter, err error) {
-	var e *ingest.Error
-	if errors.As(err, &e) {
-		writeError(w, e.Status, e.Code, e.Message)
-		return
-	}
-	writeRecommendError(w, err)
 }
 
 // postEntities answers 200 even when some entities are rejected: the rejected list says which.
@@ -77,7 +68,7 @@ func (s *Server) postEntities(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.ingest.Entities(r.Context(), body.Entities)
 	if err != nil {
-		writeIngestError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -86,7 +77,7 @@ func (s *Server) postEntities(w http.ResponseWriter, r *http.Request) {
 func (s *Server) countEntities(w http.ResponseWriter, r *http.Request) {
 	counts, err := s.store.CountEntities(r.Context())
 	if err != nil {
-		writeRecommendError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"counts": counts})
@@ -99,7 +90,7 @@ func (s *Server) getEntity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeRecommendError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, entityView(e))
@@ -123,7 +114,7 @@ func (s *Server) postInteractions(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := s.ingest.Interactions(r.Context(), body.Interactions)
 	if err != nil {
-		writeIngestError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -132,7 +123,7 @@ func (s *Server) postInteractions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) countInteractions(w http.ResponseWriter, r *http.Request) {
 	counts, err := s.store.CountInteractions(r.Context())
 	if err != nil {
-		writeRecommendError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"counts": counts})

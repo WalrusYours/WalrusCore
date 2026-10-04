@@ -54,7 +54,11 @@ context:
 
 similarity:
   track:
-    - { id: audio,     on: [energy, valence, danceability, acousticness], metric: cosine, weight: 0.35 }
+    - { id: energy,       on: energy,       metric: closeness, weight: 0.08 }
+    - { id: mood,         on: valence,      metric: closeness, weight: 0.08 }
+    - { id: danceability, on: danceability, metric: closeness, weight: 0.08 }
+    - { id: acousticness, on: acousticness, metric: closeness, weight: 0.08 }
+    - { id: tempo,        on: tempo,        metric: closeness, weight: 0.08 }
     - { id: genres,    on: genres,          metric: jaccard, weight: 0.25 }
     - { id: embedding, on: audio_embedding, metric: cosine,  weight: 0.30, index: hnsw }
     - { id: artist,    on: artist_id,       metric: equals,  weight: 0.10 }
@@ -76,7 +80,7 @@ signals:
   # "You might also add": what fits a playlist rather than the listener's general taste.
   co_listed:   { type: co_occurrence, of: [add_to_playlist], group_by: playlist_id, measure: lift, min_support: 3, default: 0.4,
                  explain: "Often added to playlists with {seed_items}" }
-  sounds_like: { type: item_neighbors, terms: [audio, embedding], default: 0.25 }
+  sounds_like: { type: item_neighbors, terms: [energy, mood, danceability, acousticness, tempo, embedding], default: 0.25 }
   genre_fit:   { type: item_neighbors, terms: [genres], default: 0.15 }
   energy_fit:  { type: attribute_target, on: energy, target: seed.mean, default: 0.1 }
   title_match: { type: context_match, on: genres, against: $context.title_words, default: 0.5 }
@@ -128,6 +132,46 @@ knobs:
     default: 1
     scope: [playlist_add]
     maps: { recommenders.playlist_add.blend_user: "0.15 * x" }
+  - id: match_energy
+    label: "Energy: don't care  <->  match closely"
+    group: Match the sound
+    help: "How much a song's intensity should match the playlist's."
+    range: [0, 1]
+    default: 0.5
+    scope: [playlist_add]
+    maps: { similarity.track.energy.weight: "0.16 * x" }
+  - id: match_mood
+    label: "Mood: don't care  <->  match closely"
+    group: Match the sound
+    help: "How much a song's happy or sad feel should match."
+    range: [0, 1]
+    default: 0.5
+    scope: [playlist_add]
+    maps: { similarity.track.mood.weight: "0.16 * x" }
+  - id: match_danceability
+    label: "Danceability: don't care  <->  match closely"
+    group: Match the sound
+    help: "How much a song's groove should match."
+    range: [0, 1]
+    default: 0.5
+    scope: [playlist_add]
+    maps: { similarity.track.danceability.weight: "0.16 * x" }
+  - id: match_acousticness
+    label: "Acoustic feel: don't care  <->  match closely"
+    group: Match the sound
+    help: "How much acoustic or electric sound should match."
+    range: [0, 1]
+    default: 0.5
+    scope: [playlist_add]
+    maps: { similarity.track.acousticness.weight: "0.16 * x" }
+  - id: match_tempo
+    label: "Tempo: don't care  <->  match closely"
+    group: Match the sound
+    help: "How much a song's speed should match."
+    range: [0, 1]
+    default: 0.5
+    scope: [playlist_add]
+    maps: { similarity.track.tempo.weight: "0.16 * x" }
 
 presets:
   default:         { taste_vs_crowd: 0.5, horizon: 0.5, familiar_vs_new: 0.4, energy: 0.5 }
@@ -172,7 +216,7 @@ recommenders:
       collaborative: "0.15 + 0.25 * max(0, 3 - seed.size) / 3"   # lean on the owner early
     constraints: [available, explicit_ok, not_in_seed, strict_genre]
     rules: [one_per_artist]
-    knobs: [vibe_vs_branch_out, deep_cuts_vs_hits, whole_vs_any, mix_in_my_taste]
+    knobs: [vibe_vs_branch_out, deep_cuts_vs_hits, whole_vs_any, mix_in_my_taste, match_energy, match_mood, match_danceability, match_acousticness, match_tempo]
     limit: { default: 20, max: 50 }
     fallback:
       - { when: "seed.size == 0", use: from_title }      # an empty playlist: only its title to go on

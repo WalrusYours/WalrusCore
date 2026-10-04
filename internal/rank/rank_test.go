@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/timurcravtov/walrus/internal/domain"
 	"github.com/timurcravtov/walrus/internal/ingest"
 	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
@@ -58,6 +59,7 @@ var playlists = [][]string{
 }
 
 type fixture struct {
+	sch   *schema.Service
 	t     *testing.T
 	svc   *recommend.Service
 	ing   *ingest.Service
@@ -75,7 +77,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("schema rejected: %+v", res.Errors)
 	}
 	st := memory.New()
-	f := &fixture{t: t, ing: ingest.NewService(sch, st), ranks: New(st)}
+	f := &fixture{t: t, sch: sch, ing: ingest.NewService(sch, st), ranks: New(st)}
 	f.svc = recommend.NewService(sch, f.ranks)
 
 	var raws []ingest.Raw
@@ -278,14 +280,18 @@ func TestAnEmptyPlaylistFallsBackToItsTitle(t *testing.T) {
 
 func TestWhatItCannotDoYetIsSkippedNotFatal(t *testing.T) {
 	f := newFixture(t)
-	res := f.ask(recommend.Request{})
+	// the feed uses own_history, trend and a diversity re-rank, which are not built yet
+	res := f.ask(recommend.Request{Recommender: "home", User: "u0", Limit: 5})
+	if len(res.Items) == 0 {
+		t.Fatal("the signals that are built should still rank")
+	}
 	b, err := f.svc.ExplainRec(res.RecID, res.Items[0].ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, s := range b.Breakdown {
-		if s.Signal == "collaborative" {
-			t.Error("collaborative needs user similarity, which is not built yet; it should be absent")
+		if s.Signal == "familiarity" || s.Signal == "trending" || s.Signal == "artist_spread" {
+			t.Errorf("%s is not built yet; it should be absent", s.Signal)
 		}
 	}
 }
@@ -332,7 +338,7 @@ func TestNormaliseRescalesAndTreatsAConstantAsNoInformation(t *testing.T) {
 }
 
 func TestCombineBlendsMeanAndBest(t *testing.T) {
-	x := &run{}
+	x := &ranking{}
 	vals := []float64{0.2, 0.4, 0.9}
 	for agg, want := range map[float64]float64{0: 0.5, 1: 0.9, 0.5: 0.7} {
 		x.seedAgg = agg
@@ -343,4 +349,12 @@ func TestCombineBlendsMeanAndBest(t *testing.T) {
 	if x.combine(nil) != 0 {
 		t.Error("nothing to combine is 0")
 	}
+}
+
+func entity(i int, nums map[string]float64) domain.Entity {
+	attrs := map[string]domain.Value{}
+	for k, v := range nums {
+		attrs[k] = domain.Num(v)
+	}
+	return domain.Entity{Type: "track", ID: domain.EntityID(fmt.Sprint("e", i)), Attrs: attrs}
 }

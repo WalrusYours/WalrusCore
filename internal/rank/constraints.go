@@ -7,45 +7,36 @@ import (
 
 	"github.com/timurcravtov/walrus/internal/domain"
 	"github.com/timurcravtov/walrus/internal/schema"
-	"github.com/timurcravtov/walrus/internal/schema/expr"
 )
 
 // applyConstraints removes every candidate that breaks one of the recommender's hard filters.
 // Weights never come into it, and nothing a user moves can bring a removed item back.
-func (x *run) applyConstraints() {
+func (s *snapshot) applyConstraints() {
 	var active []schema.Constraint
-	for _, id := range x.in.Spec.Constraints {
-		i := slices.IndexFunc(x.sch.Constraints, func(c schema.Constraint) bool { return c.ID == id })
+	for _, id := range s.spec.Constraints {
+		i := slices.IndexFunc(s.sch.Constraints, func(c schema.Constraint) bool { return c.ID == id })
 		if i < 0 {
 			continue
 		}
-		c := x.sch.Constraints[i]
-		if len(c.For) > 0 && !slices.Contains(c.For, x.typ) {
+		c := s.sch.Constraints[i]
+		if len(c.For) > 0 && !slices.Contains(c.For, s.typ) {
 			continue
 		}
 		active = append(active, c)
 	}
 
-	kept := x.cands[:0]
-	for _, i := range x.cands {
-		ok := true
-		for _, c := range active {
-			if !x.passes(c, i) {
-				ok = false
-				break
-			}
-		}
-		if ok {
+	kept := s.candidates[:0]
+	for _, i := range s.candidates {
+		if !slices.ContainsFunc(active, func(c schema.Constraint) bool { return !s.passes(c, i) }) {
 			kept = append(kept, i)
 		}
 	}
-	x.cands = kept
+	s.candidates = kept
 }
 
 // passes reports whether item i satisfies the constraint. A constraint that reads something the
-// request does not have (a $user attribute with no user entity, a context field that was not
-// sent) does not apply.
-func (x *run) passes(c schema.Constraint, i int) bool {
+// request does not have (a $user attribute, a context field that was not sent) does not apply.
+func (s *snapshot) passes(c schema.Constraint, i int) bool {
 	cond, exclude := c.Require, false
 	if c.Exclude != nil {
 		cond, exclude = c.Exclude, true
@@ -53,22 +44,23 @@ func (x *run) passes(c schema.Constraint, i int) bool {
 	if cond == nil {
 		return true
 	}
-	if cond.When != "" && !x.holds(cond.When) {
+	if cond.When != "" && !s.holds(cond.When) {
 		return true
 	}
-	match, applies := x.matches(cond, i)
+	match, applies := s.matches(cond, i)
 	if !applies {
 		return true
 	}
 	return match != exclude
 }
 
-func (x *run) holds(src string) bool {
-	e, err := expr.Compile(src)
+// holds evaluates a condition of the schema. One that cannot be evaluated does not hold.
+func (s *snapshot) holds(src string) bool {
+	e, err := s.c.Expr(src)
 	if err != nil {
 		return false
 	}
-	v, err := e.Eval(x.env)
+	v, err := e.Eval(s.env)
 	if err != nil {
 		return false
 	}
@@ -78,77 +70,75 @@ func (x *run) holds(src string) bool {
 
 // matches reports whether the item meets the condition, and whether the condition could be
 // evaluated at all.
-func (x *run) matches(cond *schema.Condition, i int) (match, applies bool) {
+func (s *snapshot) matches(cond *schema.Condition, i int) (match, applies bool) {
 	switch {
 	case cond.InSeed:
-		return x.inSd[i], true
+		return s.inSeed[i], true
 
 	case len(cond.Interacted) > 0:
-		if x.in.User == "" {
+		if s.user == "" {
 			return false, false
 		}
-		need := max(cond.CountGTE, 1)
 		since := time.Time{}
 		if cond.Within > 0 {
-			since = x.now.Add(-cond.Within.Std())
+			since = s.now.Add(-cond.Within.Std())
 		}
 		n := 0
-		for _, it := range x.ints {
-			if it.User == x.in.User && it.Target == x.ents[i].ID && slices.Contains(cond.Interacted, it.Type) && !it.TS.Before(since) {
+		for _, it := range s.interactions {
+			if it.User == s.user && it.Target == s.items[i].ID && slices.Contains(cond.Interacted, it.Type) && !it.TS.Before(since) {
 				n++
 			}
 		}
-		return n >= need, true
+		return n >= max(cond.CountGTE, 1), true
 
 	case cond.Attribute != "":
-		return x.attributeMatches(cond, x.ents[i].Attrs[cond.Attribute])
+		return s.attributeMatches(cond, s.items[i].Attrs[cond.Attribute])
 	}
 	return false, false
 }
 
-func (x *run) attributeMatches(cond *schema.Condition, have domain.Value) (match, applies bool) {
+func (s *snapshot) attributeMatches(cond *schema.Condition, have domain.Value) (match, applies bool) {
 	switch {
 	case cond.Contains != "":
-		want, ok := x.resolve(cond.Contains)
+		want, ok := s.resolve(cond.Contains)
 		if !ok {
 			return false, false
 		}
-		s, _ := want.AsString()
-		set, isSet := have.AsSet()
-		if isSet {
-			return slices.Contains(set, s), true
+		text, _ := want.AsString()
+		if set, isSet := have.AsSet(); isSet {
+			return slices.Contains(set, text), true
 		}
-		have, _ := have.AsString()
-		return strings.Contains(have, s), true
+		str, _ := have.AsString()
+		return strings.Contains(str, text), true
 
 	case cond.Equals != nil:
-		want, ok := x.literal(cond.Equals)
+		want, ok := s.literal(cond.Equals)
 		if !ok {
 			return false, false
 		}
 		return have.Equal(want), true
 
 	case cond.In != "":
-		want, ok := x.resolve(cond.In)
+		want, ok := s.resolve(cond.In)
 		if !ok {
 			return false, false
 		}
 		set, _ := want.AsSet()
-		s, _ := have.AsString()
-		return slices.Contains(set, s), true
+		str, _ := have.AsString()
+		return slices.Contains(set, str), true
 
 	case cond.Gt != "" || cond.Lt != "":
 		f, hasValue := have.AsFloat()
-		if cond.Gt != "" {
-			bound, ok := x.number(cond.Gt)
-			if !ok {
-				return false, false
-			}
-			return hasValue && f > bound, true
+		ref, above := cond.Gt, true
+		if ref == "" {
+			ref, above = cond.Lt, false
 		}
-		bound, ok := x.number(cond.Lt)
+		bound, ok := s.number(ref)
 		if !ok {
 			return false, false
+		}
+		if above {
+			return hasValue && f > bound, true
 		}
 		return hasValue && f < bound, true
 	}
@@ -156,15 +146,15 @@ func (x *run) attributeMatches(cond *schema.Condition, have domain.Value) (match
 }
 
 // resolve reads a $-reference from the request, or takes the text as it is.
-func (x *run) resolve(ref string) (domain.Value, bool) {
+func (s *snapshot) resolve(ref string) (domain.Value, bool) {
 	if strings.HasPrefix(ref, "$") {
-		v, ok := x.env[ref]
+		v, ok := s.env[ref]
 		return v, ok && !v.IsNull()
 	}
 	return domain.Str(ref), true
 }
 
-func (x *run) literal(v any) (domain.Value, bool) {
+func (s *snapshot) literal(v any) (domain.Value, bool) {
 	switch t := v.(type) {
 	case bool:
 		return domain.Bool(t), true
@@ -173,16 +163,15 @@ func (x *run) literal(v any) (domain.Value, bool) {
 	case float64:
 		return domain.Num(t), true
 	case string:
-		return x.resolve(t)
+		return s.resolve(t)
 	}
 	return domain.Value{}, false
 }
 
-func (x *run) number(ref string) (float64, bool) {
-	v, ok := x.literal(ref)
+func (s *snapshot) number(ref string) (float64, bool) {
+	v, ok := s.literal(ref)
 	if !ok {
 		return 0, false
 	}
-	f, isNum := v.AsFloat()
-	return f, isNum
+	return v.AsFloat()
 }

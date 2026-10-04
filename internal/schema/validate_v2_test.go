@@ -205,7 +205,10 @@ func TestV2ShelfRules(t *testing.T) {
 
 func TestV2SpotifyRules(t *testing.T) {
 	runV2Cases(t, "spotify.yml", []v2Case{
-		{"unknown term", "terms: [audio, embedding]", "terms: [audio, embeding]", "signals.sounds_like.terms", "not a similarity term"},
+		{"closeness on a set", "id: energy,       on: energy,       metric: closeness", "id: energy,       on: genres,       metric: closeness", "similarity.track[0].on", "closeness needs a float or int attribute"},
+		{"closeness on several attributes", "id: energy,       on: energy,       metric: closeness", "id: energy,       on: [energy, valence], metric: closeness", "similarity.track[0].on", "closeness compares one number"},
+		{"knob scales a term that does not exist", "similarity.track.energy.weight", "similarity.track.loudness.weight", "knobs[8].maps.similarity.track.loudness.weight", "not a similarity term"},
+		{"unknown term", "terms: [energy, mood, danceability, acousticness, tempo, embedding]", "terms: [energy, mood, danceability, acousticness, tempo, embeding]", "signals.sounds_like.terms", "not a similarity term"},
 		{"context match against a user value", "against: $context.title_words", "against: $user.country", "signals.title_match.against", "$context"},
 		{"unknown context field in a condition", "contains: \"$context.genre\"", "contains: \"$context.genr\"", "constraints[5].require.contains", "not a declared context field"},
 		{"seed target in a user-seeded recommender", "signals: [content, collaborative, familiarity, popularity, trending, recency, exploration, artist_spread]", "signals: [content, collaborative, familiarity, popularity, trending, recency, exploration, artist_spread, energy_fit]", "recommenders.home.signals", "items or session seed"},

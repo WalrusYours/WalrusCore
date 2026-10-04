@@ -134,9 +134,11 @@ const (
 	MetricCosine   Metric = "cosine"
 	MetricEquals   Metric = "equals"
 	MetricLogRatio Metric = "log_ratio"
+	// MetricCloseness is 1 minus the gap between two numbers as a share of the catalogue's range.
+	MetricCloseness Metric = "closeness"
 )
 
-var Metrics = []Metric{MetricJaccard, MetricCosine, MetricEquals, MetricLogRatio}
+var Metrics = []Metric{MetricJaccard, MetricCosine, MetricEquals, MetricLogRatio, MetricCloseness}
 
 func (m Metric) Valid() bool { return slices.Contains(Metrics, m) }
 

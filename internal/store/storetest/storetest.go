@@ -166,6 +166,51 @@ func Run(t *testing.T, newStore func() store.Store) {
 		}
 	})
 
+	t.Run("a user's interactions come back on their own, in arrival order", func(t *testing.T) {
+		s := newStore()
+		ts := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+		_ = s.UpsertInteractions(ctx, []domain.Interaction{
+			{User: "u1", Type: "play", Target: "a", TS: ts},
+			{User: "u2", Type: "play", Target: "b", TS: ts},
+			{User: "u1", Type: "save", Target: "c", TS: ts},
+		})
+		got, err := s.UserInteractions(ctx, "u1")
+		if err != nil || len(got) != 2 || got[0].Target != "a" || got[1].Target != "c" {
+			t.Errorf("u1 = %+v, %v", got, err)
+		}
+		if none, _ := s.UserInteractions(ctx, "nobody"); len(none) != 0 {
+			t.Errorf("an unknown user has nothing: %+v", none)
+		}
+		got[0].Target = "changed"
+		if again, _ := s.UserInteractions(ctx, "u1"); again[0].Target != "a" {
+			t.Error("changing a returned interaction changed the store")
+		}
+	})
+
+	t.Run("the version changes on every write and only then", func(t *testing.T) {
+		s := newStore()
+		v0, err := s.Version(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = s.ListEntities(ctx, "track")
+		_, _ = s.Interactions(ctx)
+		if v, _ := s.Version(ctx); v != v0 {
+			t.Errorf("reading changed the version: %d -> %d", v0, v)
+		}
+		_ = s.UpsertEntities(ctx, []domain.Entity{track("a", 0.5)})
+		v1, _ := s.Version(ctx)
+		_ = s.UpsertInteractions(ctx, []domain.Interaction{{User: "u", Type: "play", Target: "a", TS: time.Now()}})
+		v2, _ := s.Version(ctx)
+		if v1 == v0 || v2 == v1 {
+			t.Errorf("versions %d, %d, %d: each write must change it", v0, v1, v2)
+		}
+		_ = s.UpsertEntities(ctx, []domain.Entity{{Type: "track"}}) // refused
+		if v, _ := s.Version(ctx); v != v2 {
+			t.Errorf("a refused write changed the version: %d -> %d", v2, v)
+		}
+	})
+
 	t.Run("interactions are stored in arrival order and can be filtered by type", func(t *testing.T) {
 		s := newStore()
 		ts := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)

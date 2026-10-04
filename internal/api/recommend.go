@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/timurcravtov/walrus/internal/apperr"
 	"github.com/timurcravtov/walrus/internal/recommend"
 )
 
@@ -19,8 +20,8 @@ import (
 //	POST /v1/recommend/{user}                       v1: the same, with an exclude list
 //	GET  /v1/recommendations/{rec_id}/explain/{item} explain one item of one exact list
 //
-// Authentication is the admin key for now: tenants and scoped keys (the `recommend` scope)
-// are not built yet, so there is one tenant and one key.
+// Authentication is the admin key: there is one tenant and one key until tenants and scoped keys
+// (the `recommend` scope) exist.
 
 const maxRecommendBody = 1 << 20
 
@@ -82,7 +83,7 @@ func (s *Server) recommendV1(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runRecommend(w http.ResponseWriter, r *http.Request, req recommend.Request) {
 	resp, err := s.rec.Recommend(r.Context(), req)
 	if err != nil {
-		writeRecommendError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -91,7 +92,7 @@ func (s *Server) runRecommend(w http.ResponseWriter, r *http.Request, req recomm
 func (s *Server) explainRec(w http.ResponseWriter, r *http.Request) {
 	b, err := s.rec.ExplainRec(r.PathValue("rec_id"), r.PathValue("item"))
 	if err != nil {
-		writeRecommendError(w, err)
+		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, b)
@@ -115,12 +116,13 @@ func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-func writeRecommendError(w http.ResponseWriter, err error) {
-	var e *recommend.Error
+// writeServiceError answers with a service's error, or a plain 500 for anything unexpected.
+func writeServiceError(w http.ResponseWriter, err error) {
+	var e *apperr.Error
 	if errors.As(err, &e) {
 		writeError(w, e.Status, e.Code, e.Message)
 		return
 	}
-	slog.Error("recommend", "err", err)
+	slog.Error("request failed", "err", err)
 	writeError(w, http.StatusInternalServerError, "internal", "internal error")
 }

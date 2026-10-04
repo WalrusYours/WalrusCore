@@ -14,11 +14,9 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/ingest"
-	"github.com/timurcravtov/walrus/internal/rank"
 	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
 	"github.com/timurcravtov/walrus/internal/store"
-	"github.com/timurcravtov/walrus/internal/store/memory"
 )
 
 const sessionCookie = "walrus_session"
@@ -41,33 +39,29 @@ type Server struct {
 	rec      *recommend.Service
 	ingest   *ingest.Service
 	store    store.Store
+	checker  SchemaChecker
 	sessions *sessions
 	mux      *http.ServeMux
 }
 
-// Option configures the server beyond its required parts.
-type Option func(*options)
-
-type options struct {
-	ranker   recommend.Ranker
-	profiles recommend.Profiles
-	store    store.Store
+// Deps are the parts the server is built from. The command chooses them; the HTTP layer does not.
+type Deps struct {
+	Schema *schema.Service
+	Store  store.Store
+	Ranker recommend.Ranker
+	// Profiles supplies users' saved knob values. Optional.
+	Profiles recommend.Profiles
 }
 
-// WithRanker sets what generates candidates and scores them. Without it the recommend endpoints
-// answer with an empty list, because nothing has been ingested.
-func WithRanker(r recommend.Ranker) Option { return func(o *options) { o.ranker = r } }
+// SchemaChecker reports what a valid schema asks for that the engine does not do yet. A Ranker that
+// implements it has its findings added to schema push answers as warnings.
+type SchemaChecker interface {
+	Unsupported(sch *schema.Schema) []schema.Issue
+}
 
-// WithProfiles supplies users' saved knob values.
-func WithProfiles(p recommend.Profiles) Option { return func(o *options) { o.profiles = p } }
-
-// WithStore sets where entities are kept. Without it they are kept in memory.
-func WithStore(st store.Store) Option { return func(o *options) { o.store = st } }
-
-func New(cfg Config, svc *schema.Service, opts ...Option) http.Handler {
-	var o options
-	for _, opt := range opts {
-		opt(&o)
+func New(cfg Config, d Deps) http.Handler {
+	if d.Schema == nil || d.Store == nil || d.Ranker == nil {
+		panic("api.New needs a schema service, a store and a ranker")
 	}
 	if cfg.MaxSchemaBytes == 0 {
 		cfg.MaxSchemaBytes = 1 << 20
@@ -78,17 +72,18 @@ func New(cfg Config, svc *schema.Service, opts ...Option) http.Handler {
 	if cfg.SessionTTL == 0 {
 		cfg.SessionTTL = 8 * time.Hour
 	}
-	if o.store == nil {
-		o.store = memory.New()
+	rec := recommend.NewService(d.Schema, d.Ranker)
+	if d.Profiles != nil {
+		rec.WithProfiles(d.Profiles)
 	}
-	if o.ranker == nil {
-		o.ranker = rank.New(o.store)
+	if h, ok := d.Ranker.(recommend.History); ok {
+		rec.WithHistory(h)
 	}
-	rec := recommend.NewService(svc, o.ranker)
-	if o.profiles != nil {
-		rec.WithProfiles(o.profiles)
+	checker, _ := d.Ranker.(SchemaChecker)
+	s := &Server{
+		cfg: cfg, schema: d.Schema, rec: rec, ingest: ingest.NewService(d.Schema, d.Store), store: d.Store,
+		checker: checker, sessions: newSessions(cfg.SessionTTL), mux: http.NewServeMux(),
 	}
-	s := &Server{cfg: cfg, schema: svc, rec: rec, ingest: ingest.NewService(svc, o.store), store: o.store, sessions: newSessions(cfg.SessionTTL), mux: http.NewServeMux()}
 
 	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("GET /v1/health", s.health)
@@ -235,6 +230,11 @@ func (s *Server) putSchema(w http.ResponseWriter, r *http.Request) {
 		ConfirmBreaking: queryBool(r, "confirm_breaking"),
 		Author:          "admin",
 	})
+	if res.OK && s.checker != nil {
+		if sch, err := schema.Parse(body); err == nil {
+			res.Warnings = s.checker.Unsupported(sch)
+		}
+	}
 	status := http.StatusOK
 	switch {
 	case res.NeedsConfirm:

@@ -17,6 +17,7 @@ type stored struct {
 	User        domain.UserID
 	Items       []domain.ScoredItem
 	Reasons     map[domain.EntityID]string
+	Because     map[domain.EntityID]map[string]string
 	Weights     map[string]float64
 	Meta        map[string]float64
 	Experiment  *Assignment
@@ -64,8 +65,9 @@ func (c *resultCache) get(id string) (*stored, bool) {
 }
 
 type SignalShare struct {
-	Signal string  `json:"signal"`
-	Value  float64 `json:"value"`
+	Signal  string  `json:"signal"`
+	Value   float64 `json:"value"`
+	Because string  `json:"because,omitempty"`
 }
 
 type Breakdown struct {
@@ -95,7 +97,7 @@ func (s *Service) ExplainRec(recID string, item string) (*Breakdown, error) {
 		}
 		parts := make([]SignalShare, 0, len(it.Signals))
 		for sig, v := range it.Signals {
-			parts = append(parts, SignalShare{Signal: sig, Value: v})
+			parts = append(parts, SignalShare{Signal: sig, Value: v, Because: st.Because[it.Item][sig]})
 		}
 		sort.Slice(parts, func(a, b int) bool {
 			if parts[a].Value != parts[b].Value {

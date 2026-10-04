@@ -47,7 +47,7 @@ only the health endpoints are open. Scoped keys and per-tenant keys are not buil
 | Method and path | What it does |
 |---|---|
 | `GET /health`, `GET /v1/health` | Liveness: `status`, `version`, `instance_id`, `instance_name`. No key. |
-| `PUT /v1/schema` | Push the YAML schema as the request body. `?dry_run=true` validates and returns the diff without applying; `?confirm_breaking=true` applies a breaking change. 200 applied, 400 with the paths of every problem, 409 when the change is breaking and needs confirming. |
+| `PUT /v1/schema` | Push the YAML schema as the request body. `?dry_run=true` validates and returns the diff without applying; `?confirm_breaking=true` applies a breaking change. 200 applied, 400 with the paths of every problem, 409 when the change is breaking and needs confirming. An accepted schema can come back with `warnings`: what it asks for that the engine does not do yet. |
 | `GET /v1/schema` | The active schema: `yaml`, `version`, `hash`. 404 before the first push. |
 | `GET /v1/schema/history` | Every pushed version. |
 | `POST /v1/entities` | Send up to 1000 entities (items, users...) as JSON. Each is checked against the schema; bad ones are listed in `rejected` and the rest are stored. |
@@ -113,7 +113,7 @@ Authorization: Bearer <admin key>
   "used": "playlist_add",
   "rec_id": "rec_1a7751f9b1bde656",
   "items": [
-    { "id": "paranoid", "type": "track", "score": 0.678, "reason": "Often added to playlists with Back in Black" }
+    { "id": "paranoid", "type": "track", "score": 0.678, "reason": "Often added to playlists with Back in Black · Shares rock and hard rock with Thunderstruck" }
   ],
   "weights": { "co_listed": 0.4, "sounds_like": 0.0, "exploration": 0.3 },
   "knobs": { "vibe_vs_branch_out": 1 },
@@ -134,15 +134,17 @@ Authorization: Bearer <admin key>
 ### Explain
 
 `GET /v1/recommendations/{rec_id}/explain/{item}` answers from the stored list, not a recomputation,
-so the breakdown is the one that produced the score and always adds up to it.
+so the breakdown is the one that produced the score and always adds up to it. Each signal that
+contributed says in words what it found, using the actual songs, genres and numbers involved. The one-line
+`reason` in a recommend response joins the two strongest, the second only when it carries real weight.
 
 ```json
 {
   "rec_id": "rec_1a7751f9b1bde656", "item": "paranoid", "position": 1, "score": 0.678,
   "breakdown": [
-    { "signal": "co_listed", "value": 0.267 },
-    { "signal": "sounds_like", "value": 0.218 },
-    { "signal": "exploration", "value": 0.074 }
+    { "signal": "co_listed", "value": 0.267, "because": "Often added to playlists with Back in Black" },
+    { "signal": "sounds_like", "value": 0.218, "because": "Close to Thunderstruck in energy and valence" },
+    { "signal": "genre_fit", "value": 0.050, "because": "Shares rock and hard rock with Back in Black" }
   ]
 }
 ```
@@ -162,19 +164,32 @@ so the breakdown is the one that produced the score and always adds up to it.
 > **Status.** Entities and interactions are stored in memory, so they are lost on restart. Recommend ranks
 > from that store.
 >
-> The ranker supports these so far; anything else in a schema is skipped and logged once, never fatal.
+> The ranker supports these so far. Anything else a schema asks for is skipped, never fatal, and the schema push
+> lists it under `warnings`.
 >
 > - **Signals:** `item_neighbors`, `co_occurrence`, `attribute_target`, `global_count`, `low_exposure`,
->   `age_decay`, `context_match` and `provided`.
-> - **Candidate sources:** `item_neighbors`, `co_occurrence` and `popular`; with none declared, every item of
->   the type.
+>   `age_decay`, `context_match`, `provided` and `user_neighbors`.
+> - **Candidate sources:** `item_neighbors`, `co_occurrence`, `user_neighbors` (for user seeds) and `popular`; with
+>   none declared, every item of the type.
 > - **Constraints:** every form (`in_seed`, attribute `contains`/`equals`/`in`/`gt`/`lt`, `interacted`). A
 >   constraint that reads something the request does not have, such as a `$user` attribute, does not apply.
 > - **Rules:** attribute quotas (`max` per `per` positions).
-> - **Not yet:** user similarity (`user_neighbors`), `trend`, `own_history`, diversity re-ranking,
->   `blend_user`, and the other rule kinds.
+> - **Similarity metrics:** `jaccard`, `cosine`, `equals`, `log_ratio` and `closeness`. A knob bound to
+>   `similarity.<type>.<term>.weight` sets that term's weight for the recommenders that offer it, which is how
+>   each audio feature (energy, mood, danceability, acoustic feel, tempo) gets its own slider.
+> - **Not yet:** `trend`, `own_history`, diversity re-ranking and the other rule kinds.
 >
-> Candidates and similarity are computed per request, which is fine for catalogues of a few thousand items.
+> Two kinds of similarity are kept apart. **Item to item** compares what items are (the schema's
+> `similarity.<type>` terms) or how playlists and baskets hold them together (`co_occurrence`). **User to
+> user** (`similarity.user`) compares people by what they interacted with: the seed items, plus the
+> requester's own history scaled by `blend_user`, are matched with every other user by cosine, and the
+> closest users' items are suggested. The requester is never their own neighbour.
+>
+> **Instant re-rank.** Everything that does not depend on weights (the candidates, the hard constraints, the
+> similarities between candidates and seed items, co-listing counts and taste profiles) is computed once and kept
+> as a snapshot. Moving a Tune slider changes only weights, so the next request reuses the snapshot and only
+> re-scores. Any write to the store starts a new snapshot, so nothing is ranked from stale data. The snapshot is
+> built from the whole catalogue in memory, which suits catalogues of a few thousand items.
 > A reason such as "Similar to Thunderstruck" names songs by their `title` attribute when the entity has one.
 
 ## License

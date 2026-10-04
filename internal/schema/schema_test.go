@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/similarity"
 )
 
 func load(t *testing.T, name string) *Schema {
@@ -349,5 +350,19 @@ func TestExamplesAreConsistent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Every metric the schema language accepts must have an implementation, and no implementation may
+// be unreachable from a schema.
+func TestEverySchemaMetricIsImplemented(t *testing.T) {
+	names := similarity.Names()
+	for _, m := range Metrics {
+		if !slices.Contains(names, string(m)) {
+			t.Errorf("metric %q is accepted by the schema but not registered in internal/similarity", m)
+		}
+	}
+	if len(names) != len(Metrics) {
+		t.Errorf("registered %v, schema accepts %v", names, Metrics)
 	}
 }

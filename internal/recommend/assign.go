@@ -2,10 +2,13 @@ package recommend
 
 import (
 	"hash/fnv"
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/timurcravtov/walrus/internal/domain"
 	"github.com/timurcravtov/walrus/internal/schema"
+	"github.com/timurcravtov/walrus/internal/schema/expr"
 )
 
 // Experiment assignment: stateless and deterministic, so no table is
@@ -67,7 +70,7 @@ func (vc *variantCache) get(base *view, exp, variant string, set map[string]any)
 // assign decides the holdout and the experiment variant for a request to `name`. It returns the
 // view to serve with (the base schema unless a non-control variant applies), the assignment, and
 // whether the user is held out.
-func (s *Service) assign(base *view, name string, user domain.UserID, recID string, cx map[string]domain.Value) (*Assignment, *view, bool) {
+func (s *Service) assign(base *view, name string, user domain.UserID, recID string, env expr.Env) (*Assignment, *view, bool) {
 	sch := base.sch
 
 	if h := sch.Holdout; h != nil && user != "" {
@@ -78,7 +81,7 @@ func (s *Service) assign(base *view, name string, user domain.UserID, recID stri
 
 	// Group the running experiments by layer; each layer slices the buckets independently.
 	byLayer := map[string][]string{}
-	for _, id := range sortedNames(sch.Experiments) {
+	for _, id := range slices.Sorted(maps.Keys(sch.Experiments)) {
 		x := sch.Experiments[id]
 		if x.Status != "running" {
 			continue
@@ -90,7 +93,7 @@ func (s *Service) assign(base *view, name string, user domain.UserID, recID stri
 		byLayer[layer] = append(byLayer[layer], id)
 	}
 
-	for _, layer := range sortedNames(byLayer) {
+	for _, layer := range slices.Sorted(maps.Keys(byLayer)) {
 		cum := 0.0
 		for _, id := range byLayer[layer] {
 			x := sch.Experiments[id]
@@ -116,9 +119,9 @@ func (s *Service) assign(base *view, name string, user domain.UserID, recID stri
 				continue
 			}
 			if x.Audience != nil {
-				// $user attributes need the store; until it exists they read as null, so an
-				// audience on them is not met and the unit is not enrolled.
-				if holds, _ := evalBool(x.Audience.When, Seed{User: user}, cx); !holds {
+				// $user attributes are not read yet, so they are null: an audience on them is not
+				// met and the unit is not enrolled.
+				if holds, _ := evalBool(base.c, x.Audience.When, env); !holds {
 					continue
 				}
 			}
@@ -142,7 +145,7 @@ func (s *Service) assign(base *view, name string, user domain.UserID, recID stri
 // pickVariant chooses by `share`, control first and then by name.
 func pickVariant(x schema.ExperimentSpec, unit, exp string) (string, map[string]any) {
 	order := []string{"control"}
-	for _, n := range sortedNames(x.Variants) {
+	for _, n := range slices.Sorted(maps.Keys(x.Variants)) {
 		if n != "control" {
 			order = append(order, n)
 		}

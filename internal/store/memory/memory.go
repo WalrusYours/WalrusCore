@@ -19,6 +19,8 @@ type InMemoryStore struct {
 
 	interactions map[string]domain.Interaction // by identity key
 	order        []string                      // keys in arrival order
+	byUser       map[domain.UserID][]string    // keys per user, in arrival order
+	version      uint64
 }
 
 var _ store.Store = (*InMemoryStore)(nil)
@@ -27,6 +29,7 @@ func New() *InMemoryStore {
 	return &InMemoryStore{
 		entities:     map[string]map[domain.EntityID]domain.Entity{},
 		interactions: map[string]domain.Interaction{},
+		byUser:       map[domain.UserID][]string{},
 	}
 }
 
@@ -56,6 +59,9 @@ func (s *InMemoryStore) UpsertEntities(ctx context.Context, entities []domain.En
 			s.entities[e.Type] = byID
 		}
 		byID[e.ID] = clone(e)
+	}
+	if len(entities) > 0 {
+		s.version++
 	}
 	return nil
 }
@@ -165,8 +171,12 @@ func (s *InMemoryStore) UpsertInteractions(ctx context.Context, interactions []d
 		k := interactionKey(x)
 		if _, seen := s.interactions[k]; !seen {
 			s.order = append(s.order, k)
+			s.byUser[x.User] = append(s.byUser[x.User], k)
 		}
 		s.interactions[k] = cloneInteraction(x)
+	}
+	if len(interactions) > 0 {
+		s.version++
 	}
 	return nil
 }
@@ -187,6 +197,29 @@ func (s *InMemoryStore) Interactions(ctx context.Context, types ...string) ([]do
 		}
 	}
 	return out, nil
+}
+
+func (s *InMemoryStore) UserInteractions(ctx context.Context, user domain.UserID) ([]domain.Interaction, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keys := s.byUser[user]
+	out := make([]domain.Interaction, len(keys))
+	for i, k := range keys {
+		out[i] = cloneInteraction(s.interactions[k])
+	}
+	return out, nil
+}
+
+func (s *InMemoryStore) Version(ctx context.Context) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.version, nil
 }
 
 func (s *InMemoryStore) CountInteractions(ctx context.Context) (map[string]int, error) {
