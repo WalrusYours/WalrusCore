@@ -127,6 +127,7 @@ signals:
 | `trend` | Items whose recent engagement is well above what is ordinary for them: acceleration, not size. Needs `window` and, for `against: own` or `auto`, a longer `baseline`. See below. |
 | `age_decay` | Fresh items. Needs `on: <timestamp attribute>` and a `half_life`. |
 | `low_exposure` | Items few people have seen, for discovery. |
+| `embedding` | A taste the attributes do not capture, learned from who interacted with what. Needs training (`POST /v1/models/train`). Optional `factors` (default 32), `regularization`, `alpha`, `iterations` and `of`; name one entity with `for` when the schema recommends several. Pair it with `- { source: factors, signal: <id> }` in a recommender's `candidates`. |
 | `attribute_match` | Items whose attribute `on` matches a user value given in `against: "$user.<attribute>"`. |
 | `diversity_rerank` | Spreads results over the values of the attribute `on`, so one author or seller cannot fill the feed. |
 
@@ -265,7 +266,7 @@ schema v2 sections (recommenders, context, rules, metrics, experiments, feedback
 | [`news.yml`](news.yml) | News reader | `computed` attributes (reading time) and `locked` values; a knob that widens topics |
 | [`jobs.yml`](jobs.yml) | Job board | A computed `skill_count`, `apply` and `hide` interactions that exclude |
 | [`courses.yml`](courses.yml) | Online learning | Excluding completed courses and recently dropped ones |
-| [`movies.yml`](movies.yml) | Film streaming | Star ratings (explicit, centred on 3), the platform's own model blended in (`provided`), boosting originals and burying old titles, "more from this director" (`$seed`), an age limit from a sensitive attribute, a slider that depends on a switch |
+| [`movies.yml`](movies.yml) | Film streaming | Star ratings (explicit, centred on 3), the platform's own model blended in (`provided`), boosting originals and burying old titles, "more from this director" (`$seed`), an age limit from a sensitive attribute, a slider that depends on a switch, a taste learned from behaviour (`embedding` with a `factors` candidate source, weighed by the taste slider) |
 | [`social.yml`](social.yml) | Social network | A follow graph: one feed of only the accounts you follow, one of those you do not, "more from this author", who to follow (people recommended to people) |
 | [`local.yml`](local.yml) | Places near you | `geo` points, nearer is better (`proximity`), a radius that is a hard filter (`within_km`), a saved home place, "other branches of this chain", a budget in the request |
 | [`dating.yml`](dating.yml) | Dating | Two-sided matching (`reciprocal`, planned in the engine), mutual preferences as filters (gender, an inclusive age range, distance), sensitive attributes that are never explained, "they already liked you" as host-supplied scores, a once-a-day cap |

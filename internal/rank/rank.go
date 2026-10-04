@@ -85,6 +85,14 @@ func (r *Ranker) ProfileSize(ctx context.Context, c *schema.Compiled, user domai
 	return len(liked), nil
 }
 
+// noteOnce logs something worth an operator's attention once per process and key: a state the engine
+// handles by itself, such as a signal with no trained model yet.
+func (r *Ranker) noteOnce(key, msg string, args ...any) {
+	if _, seen := r.warned.LoadOrStore("note/"+key, true); !seen {
+		slog.Warn(msg, args...)
+	}
+}
+
 // warnOnce reports a schema feature the ranker does not support yet, once per feature.
 func (r *Ranker) warnOnce(kind, name string) {
 	if _, seen := r.warned.LoadOrStore(kind+"/"+name, true); !seen {

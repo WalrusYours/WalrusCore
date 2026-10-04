@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/factors"
 	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
 	"github.com/timurcravtov/walrus/internal/schema/expr"
@@ -42,14 +43,15 @@ type snapshot struct {
 	seed   []int // positions in items
 	inSeed map[int]bool
 
-	terms      []term                // the type's item similarity terms
-	scales     map[string][2]float64 // smallest and largest value of each numeric attribute
-	prepared   map[string]any        // per signal id, what its type works out in advance
-	pairings   map[string]*pairing   // per co_occurrence signal id
-	users      *userData             // interaction profiles, when the recommender compares people
-	candidates []int                 // positions in items, after the hard constraints
-	sims       map[int][][]float64   // candidate -> seed position -> term position; NaN: no value
-	gaps       map[string]float64    // typical gap between two candidates on a numeric attribute
+	terms      []term                    // the type's item similarity terms
+	scales     map[string][2]float64     // smallest and largest value of each numeric attribute
+	prepared   map[string]any            // per signal id, what its type works out in advance
+	models     map[string]*factors.Model // per embedding signal id, its trained model, when there is one
+	pairings   map[string]*pairing       // per co_occurrence signal id
+	users      *userData                 // interaction profiles, when the recommender compares people
+	candidates []int                     // positions in items, after the hard constraints
+	sims       map[int][][]float64       // candidate -> seed position -> term position; NaN: no value
+	gaps       map[string]float64        // typical gap between two candidates on a numeric attribute
 }
 
 func (r *Ranker) snapshotFor(ctx context.Context, in recommend.RankInput) (*snapshot, error) {
@@ -106,6 +108,9 @@ func (r *Ranker) build(ctx context.Context, in recommend.RankInput) (*snapshot, 
 	s.findSeed(in.Seed)
 	s.scales = s.numericScales()
 	s.terms = s.itemTerms()
+	if err := s.loadModels(ctx); err != nil {
+		return nil, err
+	}
 	s.prepareSignals()
 	s.generate()
 	s.applyConstraints()
@@ -174,7 +179,13 @@ func (s *snapshot) scale(attr string) (lo, hi float64) {
 // prepareSignals lets every signal type of the recommender work out what it can before weights are
 // known, so re-scoring after a knob change reads it instead of recomputing it.
 func (s *snapshot) prepareSignals() {
-	for _, id := range s.signalIDs() {
+	ids := slices.Clone(s.signalIDs())
+	for _, src := range s.spec.Candidates { // a source may use a signal the recommender does not score by
+		if src.Source == "factors" && src.Signal != "" && !slices.Contains(ids, src.Signal) {
+			ids = append(ids, src.Signal)
+		}
+	}
+	for _, id := range ids {
 		spec, ok := s.sch.Signals[id]
 		if !ok {
 			continue

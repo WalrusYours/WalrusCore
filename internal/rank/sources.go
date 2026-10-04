@@ -15,6 +15,7 @@ var sources = map[string]sourceFn{
 	"item_neighbors": func(s *snapshot, _ schema.CandidateSource, cap int) []int { return s.neighbours(cap) },
 	"co_occurrence":  coListedWithSeed,
 	"user_neighbors": func(s *snapshot, _ schema.CandidateSource, cap int) []int { return s.likedByNeighbours(cap) },
+	"factors":        func(s *snapshot, src schema.CandidateSource, cap int) []int { return s.factorCandidates(src, cap) },
 	"popular":        func(s *snapshot, _ schema.CandidateSource, cap int) []int { return s.popular(cap) },
 	"fresh":          func(s *snapshot, _ schema.CandidateSource, cap int) []int { return s.fresh(cap) },
 }

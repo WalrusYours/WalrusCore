@@ -366,6 +366,7 @@ func (v *validator) recommenderExists(name string) bool {
 var (
 	candidateSignalType = map[string]string{
 		"trend": "trend", "co_occurrence": "co_occurrence", "sequence": "sequence", "mutuals": "mutual_connections",
+		"factors": "embedding",
 	}
 	itemSeeds = []string{SeedItem, SeedItems, SeedSession}
 )
@@ -472,6 +473,10 @@ func (v *validator) recommenderCandidates(p, name string, r RecommenderSpec, see
 		case "item_neighbors":
 			if seed == SeedNone {
 				v.add(cp+".source", "item_neighbors needs something to be similar to; seed none has nothing")
+			}
+		case "factors":
+			if seed == SeedNone {
+				v.add(cp+".source", "factors needs something to fit: a user (their history), an item, items or a session")
 			}
 		}
 	}
@@ -833,7 +838,7 @@ func (v *validator) variant(p string, set map[string]any, shadow bool) {
 		return
 	}
 	for _, path := range sortedKeys(set) {
-		tier := PathTier(path)
+		tier := v.s.TierOf(path)
 		switch {
 		case tier == TierUnknown:
 			v.add(p, "%s: not a schema path", path)

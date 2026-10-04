@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/factors"
 	"github.com/timurcravtov/walrus/internal/store"
 )
 
@@ -20,6 +21,7 @@ type InMemoryStore struct {
 	interactions map[string]domain.Interaction // by identity key
 	order        []string                      // keys in arrival order
 	byUser       map[domain.UserID][]string    // keys per user, in arrival order
+	models       map[string]*factors.Model     // the active trained model per name
 	version      uint64
 }
 
@@ -30,6 +32,7 @@ func New() *InMemoryStore {
 		entities:     map[string]map[domain.EntityID]domain.Entity{},
 		interactions: map[string]domain.Interaction{},
 		byUser:       map[domain.UserID][]string{},
+		models:       map[string]*factors.Model{},
 	}
 }
 
@@ -211,6 +214,39 @@ func (s *InMemoryStore) UserInteractions(ctx context.Context, user domain.UserID
 		out[i] = cloneInteraction(s.interactions[k])
 	}
 	return out, nil
+}
+
+func (s *InMemoryStore) SaveModel(ctx context.Context, name string, m *factors.Model) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if name == "" || m == nil {
+		return 0, fmt.Errorf("store: a model needs a name and a body")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := 1
+	if old, ok := s.models[name]; ok {
+		next = old.Version + 1
+	}
+	stored := *m // a copy: the caller keeps its own, with its own version
+	stored.Version = next
+	s.models[name] = &stored
+	s.version++
+	return next, nil
+}
+
+func (s *InMemoryStore) Model(ctx context.Context, name string) (*factors.Model, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m, ok := s.models[name]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return m, nil // models never change once stored, so sharing the pointer is safe
 }
 
 func (s *InMemoryStore) Version(ctx context.Context) (uint64, error) {

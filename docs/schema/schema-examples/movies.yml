@@ -4,7 +4,10 @@
 #   - editorial rules: boost the platform's originals, bury very old titles;
 #   - "more from this director": a recommender scoped by the seed film's own attribute;
 #   - an age limit that is a hard filter, from a sensitive attribute of the user;
-#   - a slider that only makes sense while a switch is on (`depends_on`).
+#   - a slider that only makes sense while a switch is on (`depends_on`);
+#   - a taste learned from behaviour alone (`embedding`), trained in the background with
+#     POST /v1/models/train and used both as a score and as a candidate source (`factors`); until it
+#     is trained it scores every film alike and adds no candidates.
 version: 1
 
 meta:
@@ -57,6 +60,7 @@ similarity:
 signals:
   content:          { type: item_neighbors, default: 0.5 }
   people_like_you:  { type: user_neighbors, default: 0.4 }
+  hidden_taste:     { type: embedding, for: film, factors: 32, of: [watch, rate, watchlist], default: 0.25 }   # learned from who watched what
   popularity:       { type: global_count, window: 30d, normalise: rank, default: 0.15 }   # heavy-tailed: ranks, not min-max
   recency:          { type: age_decay, on: released_at, half_life: 90d, default: 0.1 }
   model:            { type: provided, name: ranker_v3, default: 0.3 }                      # the platform's own model
@@ -79,7 +83,7 @@ knobs:
     group: Taste
     range: [0, 1]
     default: 0.5
-    maps: { content: "0.6 * (1 - x)", people_like_you: "0.4 * x", popularity: "0.3 * x" }
+    maps: { content: "0.6 * (1 - x)", hidden_taste: "0.3 * (1 - x)", people_like_you: "0.4 * x", popularity: "0.3 * x" }
   - id: show_originals
     kind: toggle
     label: Show our originals first
@@ -115,7 +119,8 @@ recommenders:
       - { source: user_neighbors, cap: 150 }
       - { source: popular, cap: 50 }
       - { source: provided, cap: 100 }                       # the platform's own shortlist joins the pool
-    signals: [content, people_like_you, popularity, recency, model, exploration]
+      - { source: factors, signal: hidden_taste, cap: 100 }  # films the learned taste says fit this viewer
+    signals: [content, people_like_you, hidden_taste, popularity, recency, model, exploration]
     constraints: [age_ok, not_watched]
     rules: [boost_originals, bury_old, genre_variety]
     knobs: [taste_vs_crowd, show_originals, originals_amount, use_ratings]
@@ -130,7 +135,8 @@ recommenders:
     blend_user: 0.2
     candidates:
       - { source: item_neighbors, cap: 100 }
-    signals: [content, people_like_you, popularity]
+      - { source: factors, signal: hidden_taste, cap: 100 }  # films that people who watched this one also watched
+    signals: [content, people_like_you, hidden_taste, popularity]
     constraints: [age_ok, not_in_seed]
     knobs: [taste_vs_crowd]
 

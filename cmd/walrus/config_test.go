@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func fakeEnv(kv map[string]string) func(string) string {
 	return func(k string) string { return kv[k] }
@@ -53,5 +56,28 @@ func TestRealKeyAllowsAnyAddress(t *testing.T) {
 	cfg, err := resolveListen(fakeEnv(map[string]string{"WALRUS_ADMIN_KEY": "x1", "WALRUS_ADDR": "0.0.0.0:9000"}))
 	if err != nil || cfg.Addr != "0.0.0.0:9000" {
 		t.Errorf("cfg = %+v, err = %v", cfg, err)
+	}
+}
+
+func TestTrainIntervalIsOffUnlessAsked(t *testing.T) {
+	d, err := resolveTrainInterval(fakeEnv(nil))
+	if err != nil || d != 0 {
+		t.Errorf("unset = %v, %v; want 0 (train only on request)", d, err)
+	}
+	for in, want := range map[string]time.Duration{
+		"15m": 15 * time.Minute, "1h": time.Hour, "1d": 24 * time.Hour, "1m": time.Minute, "0": 0,
+	} {
+		got, err := resolveTrainInterval(fakeEnv(map[string]string{"WALRUS_TRAIN_INTERVAL": in}))
+		if err != nil || got != want {
+			t.Errorf("%q = %v, %v; want %v", in, got, err, want)
+		}
+	}
+}
+
+func TestTrainIntervalRefusesNonsense(t *testing.T) {
+	for _, in := range []string{"soon", "15", "-5m", "30s", "1ms"} {
+		if d, err := resolveTrainInterval(fakeEnv(map[string]string{"WALRUS_TRAIN_INTERVAL": in})); err == nil {
+			t.Errorf("%q was accepted as %v", in, d)
+		}
 	}
 }

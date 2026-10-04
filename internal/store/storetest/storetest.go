@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/factors"
 	"github.com/timurcravtov/walrus/internal/store"
 )
 
@@ -272,6 +273,85 @@ func Run(t *testing.T, newStore func() store.Store) {
 		got[0].Fields["k"] = "changed"
 		if again, _ := s.Interactions(ctx); again[0].Fields["k"] != "v" {
 			t.Error("changing a returned interaction changed the store")
+		}
+	})
+
+	model := func(t *testing.T, items ...string) *factors.Model {
+		t.Helper()
+		ids := make([]domain.EntityID, len(items))
+		vecs := make([]float32, 0, 2*len(items))
+		for i, id := range items {
+			ids[i] = domain.EntityID(id)
+			vecs = append(vecs, float32(i), 1)
+		}
+		p := factors.Params{Factors: 2, Regularization: 1, Alpha: 1, Iterations: 1}
+		m, err := factors.NewModel(p, ids, vecs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	t.Run("a model that was never trained is ErrNotFound", func(t *testing.T) {
+		s := newStore()
+		if _, err := s.Model(ctx, "taste"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Model = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("a saved model is read back and each save is the next version", func(t *testing.T) {
+		s := newStore()
+		first := model(t, "a", "b")
+		v, err := s.SaveModel(ctx, "taste", first)
+		if err != nil || v != 1 {
+			t.Fatalf("first save = %d, %v; want version 1", v, err)
+		}
+		if first.Version != 0 {
+			t.Errorf("SaveModel changed the caller's model: version %d", first.Version)
+		}
+		got, err := s.Model(ctx, "taste")
+		if err != nil || got.Version != 1 || len(got.Items) != 2 || got.Items[1] != "b" || got.Vecs[2] != 1 {
+			t.Fatalf("Model = %+v, %v", got, err)
+		}
+		if row, ok := got.Row("b"); !ok || row != 1 {
+			t.Errorf("the stored model lost its item index: Row(b) = %d, %v", row, ok)
+		}
+		if v, _ := s.SaveModel(ctx, "taste", model(t, "a", "b", "c")); v != 2 {
+			t.Errorf("second save = version %d, want 2", v)
+		}
+		if got, _ := s.Model(ctx, "taste"); got.Version != 2 || len(got.Items) != 3 {
+			t.Errorf("the active model is %+v, want version 2 with 3 items", got)
+		}
+	})
+
+	t.Run("models with different names are kept apart", func(t *testing.T) {
+		s := newStore()
+		_, _ = s.SaveModel(ctx, "taste", model(t, "a"))
+		_, _ = s.SaveModel(ctx, "mood", model(t, "x", "y"))
+		a, _ := s.Model(ctx, "taste")
+		b, _ := s.Model(ctx, "mood")
+		if len(a.Items) != 1 || len(b.Items) != 2 || a.Version != 1 || b.Version != 1 {
+			t.Errorf("taste = %d items v%d, mood = %d items v%d", len(a.Items), a.Version, len(b.Items), b.Version)
+		}
+	})
+
+	t.Run("saving a model changes the store version, so what was computed from the old one is stale", func(t *testing.T) {
+		s := newStore()
+		before, _ := s.Version(ctx)
+		_, _ = s.SaveModel(ctx, "taste", model(t, "a"))
+		after, _ := s.Version(ctx)
+		if after == before {
+			t.Error("the store version did not change when a model was saved")
+		}
+	})
+
+	t.Run("a model needs a name and a body", func(t *testing.T) {
+		s := newStore()
+		if _, err := s.SaveModel(ctx, "", model(t, "a")); err == nil {
+			t.Error("a model without a name was accepted")
+		}
+		if _, err := s.SaveModel(ctx, "taste", nil); err == nil {
+			t.Error("a nil model was accepted")
 		}
 	})
 }

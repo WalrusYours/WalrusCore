@@ -257,7 +257,7 @@ var knownSignalTypes = []string{
 	"item_neighbors", "user_neighbors", "own_history", "global_count",
 	"age_decay", "low_exposure", "attribute_match", "diversity_rerank", "trend",
 	"co_occurrence", "sequence", "mutual_connections", "attribute_target", "attribute_value",
-	"context_match", "provided", "formula", "satiation", "recurrence", "proximity",
+	"context_match", "provided", "formula", "satiation", "recurrence", "proximity", "embedding",
 }
 
 var metaTargets = []string{"interactions.half_life_scale", "constraint.energy_center"}

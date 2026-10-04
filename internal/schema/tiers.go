@@ -52,6 +52,18 @@ func PathTier(path string) Tier {
 	return TierUnknown
 }
 
+// TierOf is PathTier for a path in this schema. One tier depends on the schema: `from` of an
+// embedding signal picks the history its vectors are trained on, so it is T1; on any other signal
+// it only weights how much a type's history counts, which is T3.
+func (s *Schema) TierOf(path string) Tier {
+	if parts := strings.Split(path, "."); len(parts) >= 3 && parts[0] == "signals" && parts[2] == "from" {
+		if sg, ok := s.Signals[parts[1]]; ok && sg.Type == "embedding" {
+			return TierT1
+		}
+	}
+	return PathTier(path)
+}
+
 // listsByID are the top-level lists whose items a path addresses by id.
 var listsByID = []string{"constraints", "rules", "knobs"}
 

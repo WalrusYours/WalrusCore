@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/api"
+	"github.com/timurcravtov/walrus/internal/learn"
 	"github.com/timurcravtov/walrus/internal/rank"
 	"github.com/timurcravtov/walrus/internal/schema"
 	"github.com/timurcravtov/walrus/internal/store/memory"
@@ -34,10 +36,11 @@ func newInstanceID() string {
 	return hex.EncodeToString(b)
 }
 
-// wire picks the engine's parts: the in-memory store and the ranker that reads it.
+// wire picks the engine's parts: the in-memory store, the ranker that reads it, and the runner that
+// trains the models the ranker serves.
 func wire() api.Deps {
-	st := memory.New()
-	return api.Deps{Schema: schema.NewService(), Store: st, Ranker: rank.New(st)}
+	st, sch := memory.New(), schema.NewService()
+	return api.Deps{Schema: sch, Store: st, Ranker: rank.New(st), Trainer: learn.NewRunner(st, sch.Compiled)}
 }
 
 func main() {
@@ -50,15 +53,26 @@ func main() {
 		slog.Warn("using the development admin key \"key\" on loopback only; set WALRUS_ADMIN_KEY for anything else")
 	}
 
+	trainEvery, err := resolveTrainInterval(os.Getenv)
+	if err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
+
 	cfg := api.Config{
 		AdminKey:     listen.AdminKey,
 		InstanceID:   env("WALRUS_INSTANCE_ID", newInstanceID()),
 		InstanceName: env("WALRUS_INSTANCE_NAME", "walrus"),
 		Version:      version,
 	}
+	deps := wire()
+	if trainEvery > 0 {
+		go deps.Trainer.Every(context.Background(), trainEvery)
+		slog.Info("retraining learned models on a schedule", "every", trainEvery)
+	}
 	srv := &http.Server{
 		Addr:              listen.Addr,
-		Handler:           api.New(cfg, wire()),
+		Handler:           api.New(cfg, deps),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

@@ -5,6 +5,8 @@ import (
 	"math"
 	"slices"
 	"strings"
+
+	"github.com/timurcravtov/walrus/internal/factors"
 )
 
 // signalParams checks each type's own keys. Unknown keys are reported by
@@ -268,7 +270,38 @@ func (v *validator) signalParams(p string, sg SignalSpec) {
 		if v.s.Recurrence == nil {
 			v.add(p, "a recurrence signal needs the recurrence section")
 		}
+	case "embedding":
+		names("of", false, positive)
+		v.embedding(p, sg, ents)
 	}
+}
+
+// embedding checks an `embedding` signal: the training settings, and that it learns one entity type
+// from that type's own history.
+func (v *validator) embedding(p string, sg SignalSpec, ents []string) {
+	if len(ents) != 1 {
+		v.add(p+".for", "an embedding learns one entity type; name it with for: <entity>, one signal per type")
+	} else if len(sg.From) > 0 && (len(sg.From) != 1 || sg.From[0] != ents[0]) {
+		v.add(p+".from", "an embedding learns from the history of the entity it scores (%s); from is not supported for anything else yet", ents[0])
+	}
+	whole := func(key string, lo, hi int) {
+		if raw, ok := sg.Params[key]; ok {
+			if n, isNum := trendNumber(raw); !isNum || n != math.Trunc(n) || n < float64(lo) || n > float64(hi) {
+				v.add(p+"."+key, "%s must be a whole number from %d to %d", key, lo, hi)
+			}
+		}
+	}
+	above0 := func(key string) {
+		if raw, ok := sg.Params[key]; ok {
+			if n, isNum := trendNumber(raw); !isNum || n <= 0 {
+				v.add(p+"."+key, "%s must be a number above 0", key)
+			}
+		}
+	}
+	whole("factors", 1, factors.MaxFactors)
+	whole("iterations", 1, factors.MaxIterations)
+	above0("regularization")
+	above0("alpha")
 }
 
 func (v *validator) hasTerm(entity, id string) bool {

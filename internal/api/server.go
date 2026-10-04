@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/timurcravtov/walrus/internal/ingest"
+	"github.com/timurcravtov/walrus/internal/learn"
 	"github.com/timurcravtov/walrus/internal/recommend"
 	"github.com/timurcravtov/walrus/internal/schema"
 	"github.com/timurcravtov/walrus/internal/store"
@@ -39,6 +40,7 @@ type Server struct {
 	rec      *recommend.Service
 	ingest   *ingest.Service
 	store    store.Store
+	trainer  *learn.Runner
 	checker  SchemaChecker
 	sessions *sessions
 	mux      *http.ServeMux
@@ -51,6 +53,9 @@ type Deps struct {
 	Ranker recommend.Ranker
 	// Profiles supplies users' saved knob values. Optional.
 	Profiles recommend.Profiles
+	// Trainer runs model training in the background. Optional: without one the server makes its own,
+	// which only the API starts; pass one to share it with a schedule.
+	Trainer *learn.Runner
 }
 
 // SchemaChecker reports what a valid schema asks for that the engine does not do yet. A Ranker that
@@ -80,9 +85,13 @@ func New(cfg Config, d Deps) http.Handler {
 		rec.WithHistory(h)
 	}
 	checker, _ := d.Ranker.(SchemaChecker)
+	trainer := d.Trainer
+	if trainer == nil {
+		trainer = learn.NewRunner(d.Store, d.Schema.Compiled)
+	}
 	s := &Server{
 		cfg: cfg, schema: d.Schema, rec: rec, ingest: ingest.NewService(d.Schema, d.Store), store: d.Store,
-		checker: checker, sessions: newSessions(cfg.SessionTTL), mux: http.NewServeMux(),
+		trainer: trainer, checker: checker, sessions: newSessions(cfg.SessionTTL), mux: http.NewServeMux(),
 	}
 
 	s.mux.HandleFunc("GET /health", s.health)
@@ -99,6 +108,7 @@ func New(cfg Config, d Deps) http.Handler {
 	s.routeEntities()
 	s.routeKnobs()
 	s.routeRecommend()
+	s.routeModels()
 	return s
 }
 

@@ -168,10 +168,17 @@ contributed says in words what it found, using the actual songs, genres and numb
 > lists it under `warnings`.
 >
 > - **Signals:** `item_neighbors`, `co_occurrence`, `attribute_target`, `global_count`, `low_exposure`,
->   `age_decay`, `context_match`, `provided`, `user_neighbors` and `proximity` (nearer is better, from `geo`
->   points).
-> - **Candidate sources:** `item_neighbors`, `co_occurrence`, `user_neighbors` (for user seeds), `popular` and
+>   `age_decay`, `context_match`, `provided`, `user_neighbors`, `proximity` (nearer is better, from `geo`
+>   points) and `embedding` (a taste learned from who interacted with what; see below).
+> - **Candidate sources:** `item_neighbors`, `co_occurrence`, `user_neighbors` (for user seeds), `factors`
+>   (the items whose learned vectors fit the user, or sit closest to the seed items), `popular` and
 >   `fresh` (the newest by `lifecycle.created`); with none declared, every item of the type.
+> - **Learned taste (`embedding`):** item vectors are trained from the interactions, in the background,
+>   with `POST /v1/models/train` or on a schedule with `WALRUS_TRAIN_INTERVAL` (for example `15m`; unset
+>   trains only on request). `GET /v1/models` shows each model against the schema and the last run.
+>   A user's own vector is solved from their history on every request, so what they did a minute ago
+>   counts at once; items added after the last run score neutrally until the next one. Until the first
+>   run the signal scores every item alike.
 > - **Constraints:** every form (`in_seed`, attribute `contains`/`equals`/`in`/`gt`/`gte`/`lt`/`lte`,
 >   `within_km` of a place, `interacted`). Operands can read `$user.<attribute>` (the user's own entity),
 >   `$context.<field>` and `$seed.<attribute>` (the seed items' values, for "more from this author"). A

@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
+
+	"github.com/timurcravtov/walrus/internal/schema"
 )
 
 const devAdminKey = "key"
@@ -48,4 +51,24 @@ func isLoopback(addr string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// minTrainInterval keeps a typo from retraining the models in a loop.
+const minTrainInterval = time.Minute
+
+// resolveTrainInterval reads WALRUS_TRAIN_INTERVAL, how often the engine retrains its learned models
+// (a schema duration such as 15m or 1d). Unset or 0 means only when asked, with POST /v1/models/train.
+func resolveTrainInterval(getenv func(string) string) (time.Duration, error) {
+	raw := getenv("WALRUS_TRAIN_INTERVAL")
+	if raw == "0" {
+		return 0, nil
+	}
+	d, err := schema.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("WALRUS_TRAIN_INTERVAL: %w", err)
+	}
+	if d != 0 && d.Std() < minTrainInterval {
+		return 0, fmt.Errorf("WALRUS_TRAIN_INTERVAL is %q; use %s or more, or leave it unset to train only on request", raw, minTrainInterval)
+	}
+	return d.Std(), nil
 }

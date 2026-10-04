@@ -34,6 +34,7 @@ var signalTypes = map[string]signalType{
 	"age_decay":        {score: ageDecay},
 	"context_match":    {score: contextMatch},
 	"provided":         {score: providedScores},
+	"embedding":        {prepare: prepareEmbedding, score: embedding},
 }
 
 func itemNeighbors(rk *ranking, _ string, spec schema.SignalSpec) ([]float64, func(int) string) {

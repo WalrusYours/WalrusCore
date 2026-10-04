@@ -25,8 +25,12 @@ var SignalTypes = []string{
 	"item_neighbors", "user_neighbors", "own_history", "global_count",
 	"age_decay", "low_exposure", "attribute_match", "diversity_rerank", "trend",
 	"co_occurrence", "sequence", "mutual_connections", "attribute_target", "attribute_value",
-	"context_match", "provided", "formula", "satiation", "recurrence", "proximity",
+	"context_match", "provided", "formula", "satiation", "recurrence", "proximity", "embedding",
 }
+
+// embeddingKeys are the parameters of an `embedding` signal. They describe how its item vectors
+// are trained (T1), so changing one marks the model for retraining.
+var embeddingKeys = []string{"factors", "regularization", "alpha", "iterations", "of"}
 
 // trendKeys are the parameters of a `trend` signal.
 var trendKeys = []string{"window", "baseline", "against", "on", "of", "count", "min", "ratio"}
@@ -54,6 +58,7 @@ var signalKeys = map[string][]string{
 	"formula":            {"expr"},
 	"satiation":          {"of", "by", "level"},
 	"recurrence":         {"of"},
+	"embedding":          embeddingKeys,
 }
 
 var MetaTargets = []string{"interactions.half_life_scale", "constraint.energy_center"}

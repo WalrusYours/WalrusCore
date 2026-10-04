@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/timurcravtov/walrus/internal/domain"
+	"github.com/timurcravtov/walrus/internal/factors"
 )
 
 var ErrNotFound = errors.New("store: not found")
@@ -22,7 +23,15 @@ type Store interface {
 	UserInteractions(ctx context.Context, user domain.UserID) ([]domain.Interaction, error)
 	CountInteractions(ctx context.Context) (map[string]int, error)
 
-	// Version changes whenever anything is written, so a reader can tell whether what it computed
-	// from the store is still current.
+	// SaveModel makes m the active trained model called name (the id of an embedding signal) and
+	// returns the version it was given: 1 for the first model under that name, then one more each
+	// time. The model the caller passed is not changed. A request in flight keeps the model it
+	// already read; readers never see a mix of two.
+	SaveModel(ctx context.Context, name string, m *factors.Model) (version int, err error)
+	// Model returns the active model called name, or ErrNotFound when none has been trained.
+	Model(ctx context.Context, name string) (*factors.Model, error)
+
+	// Version changes whenever anything is written, a model included, so a reader can tell
+	// whether what it computed from the store is still current.
 	Version(ctx context.Context) (uint64, error)
 }

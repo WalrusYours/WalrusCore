@@ -111,7 +111,7 @@ func (r RecommenderSpec) EffectiveSeed() string {
 }
 
 var CandidateSources = []string{
-	"item_neighbors", "user_neighbors", "trend", "popular", "fresh", "unexposed",
+	"item_neighbors", "user_neighbors", "factors", "trend", "popular", "fresh", "unexposed",
 	"co_occurrence", "sequence", "mutuals", "provided",
 }
 

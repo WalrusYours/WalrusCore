@@ -181,31 +181,38 @@ func explain(cols []column, c int, contrib []float64) (map[string]string, string
 }
 
 // normalise rescales one signal over the candidates so weights mean the same for every signal.
-// A constant signal carries no information and becomes 0.5 everywhere.
+// A constant signal carries no information and becomes 0.5 everywhere. A candidate a signal has no
+// value for (NaN) is left out of the scaling and also gets 0.5: it is neither favoured nor held back.
 func normalise(raw []float64, how string) []float64 {
 	out := make([]float64, len(raw))
+	known := make([]int, 0, len(raw)) // positions that have a value
+	for i, v := range raw {
+		if math.IsNaN(v) {
+			out[i] = 0.5
+		} else {
+			known = append(known, i)
+		}
+	}
 	switch how {
 	case "none":
-		copy(out, raw)
+		for _, i := range known {
+			out[i] = raw[i]
+		}
 		return out
 	case "rank":
-		order := make([]int, len(raw))
-		for i := range order {
-			order[i] = i
-		}
-		sort.SliceStable(order, func(a, b int) bool { return raw[order[a]] < raw[order[b]] })
-		for rank, i := range order {
-			out[i] = float64(rank+1) / float64(len(raw))
+		sort.SliceStable(known, func(a, b int) bool { return raw[known[a]] < raw[known[b]] })
+		for rank, i := range known {
+			out[i] = float64(rank+1) / float64(len(known))
 		}
 		return out
 	}
 	lo, hi := math.Inf(1), math.Inf(-1)
-	for _, v := range raw {
-		lo, hi = min(lo, v), max(hi, v)
+	for _, i := range known {
+		lo, hi = min(lo, raw[i]), max(hi, raw[i])
 	}
-	for i, v := range raw {
+	for _, i := range known {
 		if hi > lo {
-			out[i] = (v - lo) / (hi - lo)
+			out[i] = (raw[i] - lo) / (hi - lo)
 		} else {
 			out[i] = 0.5
 		}
