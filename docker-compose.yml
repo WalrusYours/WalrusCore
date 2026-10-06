@@ -1,0 +1,103 @@
+# The engine install:  docker compose up -d   (optional .env, see .env.example)
+#
+#   dashboard --/api proxy--> walrus --bolt--> neo4j
+#
+# Pulls the published images (the release workflows push them to Docker Hub). Pin a release with
+# WALRUS_VERSION / DASHBOARD_VERSION (a tag without the v: 1.2.3); both default to latest.
+# REGISTRY_URL points at a mirror or private registry instead of Docker Hub.
+#
+# Wired like Coolify's own compose: fixed container names, restart always, a named network the
+# services reach each other on by name, named volumes, healthchecks that gate startup. Every setting
+# has a development default so a bare `docker compose up` works; set the admin key and the Neo4j
+# password in .env for anything but a local try-out. Neo4j also sits on a `data` network that only
+# the engine joins, so nothing else can reach it.
+#
+# The dashboard is bound to ONE engine at deploy time via WALRUS_UPSTREAM: nobody types or changes a
+# URL in the browser. Both are published on loopback by default: put your reverse proxy in front.
+# The dashboard is an operator tool and should only be reachable on a trusted network. Set
+# WALRUS_BIND=0.0.0.0 to let app servers on other hosts reach the engine directly.
+#
+# NOTE: the engine does not read Neo4j yet. It starts and keeps what it is sent in memory (the Neo4j
+# store is not built). The wiring below is what that store will use, and the engine already waits for
+# the database to be healthy.
+name: walrus
+
+services:
+  neo4j:
+    image: neo4j:5
+    container_name: walrus-neo4j
+    restart: always
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-walrus-dev-password}
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j-data:/data
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 5s
+      retries: 10
+      timeout: 2s
+      start_period: 40s # first boot downloads APOC and creates the database
+
+  walrus:
+    image: "${REGISTRY_URL:-docker.io}/${DOCKERHUB_USERNAME:-timurcravtov}/walrus:${WALRUS_VERSION:-latest}"
+    container_name: walrus
+    restart: always
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      WALRUS_ADDR: ":8080"
+      WALRUS_INSTANCE_NAME: ${WALRUS_INSTANCE_NAME:-walrus}
+      WALRUS_ADMIN_KEY: ${WALRUS_ADMIN_KEY:-walrus-dev-key}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-walrus-dev-password}
+    ports:
+      - "${WALRUS_BIND:-127.0.0.1}:${WALRUS_PORT:-8080}:8080"
+    networks:
+      - walrus
+      - data
+    healthcheck:
+      # The image is distroless (no curl or wget), so the binary probes itself.
+      test: ["CMD", "/walrus", "healthcheck"]
+      interval: 5s
+      retries: 10
+      timeout: 2s
+      start_period: 5s
+
+  # Operator UI. Its nginx forwards /api/ to WALRUS_UPSTREAM, so it can only manage the engine it
+  # was deployed with.
+  dashboard:
+    image: "${REGISTRY_URL:-docker.io}/${DOCKERHUB_USERNAME:-timurcravtov}/walrus-dashboard:${DASHBOARD_VERSION:-latest}"
+    container_name: walrus-dashboard
+    restart: always
+    depends_on:
+      walrus:
+        condition: service_healthy
+    environment:
+      WALRUS_UPSTREAM: http://walrus:8080
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-3001}:80"
+    networks:
+      - walrus
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1/ || exit 1"]
+      interval: 5s
+      retries: 10
+      timeout: 2s
+
+volumes:
+  neo4j-data:
+    name: walrus-neo4j
+
+networks:
+  walrus:
+    name: walrus
+    driver: bridge
+  # Database traffic only: the engine and Neo4j.
+  data:
+    name: walrus-data
+    driver: bridge

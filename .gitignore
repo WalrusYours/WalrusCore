@@ -3,3 +3,6 @@
 /bin/
 /walrus
 /walrusctl
+
+# local config and secrets
+.env

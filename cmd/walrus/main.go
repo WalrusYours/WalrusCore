@@ -45,6 +45,14 @@ func wire() api.Deps {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := healthcheck(os.Getenv); err != nil {
+			os.Stderr.WriteString("unhealthy: " + err.Error() + "\n")
+			os.Exit(1)
+		}
+		return
+	}
+
 	listen, err := resolveListen(os.Getenv)
 	if err != nil {
 		slog.Error(err.Error())
