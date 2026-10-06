@@ -17,7 +17,8 @@ import (
 	"github.com/timurcravtov/walrus/internal/store/memory"
 )
 
-const version = "0.0.0-dev"
+// version is stamped at release time: -ldflags "-X main.version=1.2.3". It must stay a var for -X to work.
+var version = "0.0.0-dev"
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {

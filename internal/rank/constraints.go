@@ -12,14 +12,17 @@ import (
 
 // applyConstraints removes every candidate that breaks one of the recommender's hard filters.
 // Weights never come into it, and nothing a user moves can bring a removed item back.
+//
+// A recommender that does not list `constraints` uses every constraint the schema declares, so a
+// filter is never skipped by leaving it out; listing `constraints: []` opts out of all of them.
+// The implicit `default` recommender of a schema with no `recommenders` section lists none, so it
+// applies them all.
 func (s *snapshot) applyConstraints() {
 	var active []schema.Constraint
-	for _, id := range s.spec.Constraints {
-		i := slices.IndexFunc(s.sch.Constraints, func(c schema.Constraint) bool { return c.ID == id })
-		if i < 0 {
+	for _, c := range s.sch.Constraints {
+		if s.spec.Constraints != nil && !slices.Contains(s.spec.Constraints, c.ID) {
 			continue
 		}
-		c := s.sch.Constraints[i]
 		if len(c.For) > 0 && !slices.Contains(c.For, s.typ) {
 			continue
 		}

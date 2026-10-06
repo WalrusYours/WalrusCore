@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -287,5 +288,79 @@ func TestASecondTrainWhileOneRunsIsRefused(t *testing.T) {
 	close(g.release)
 	if v := waitForTraining(t, srv); v.Job.Results[0].Version != 1 {
 		t.Errorf("after the run: %+v", v.Job)
+	}
+}
+
+// A v1 schema has no `recommenders` section: the main route, GET /v1/recommend/{user}, runs the
+// implicit default recommender over every signal.
+const mainRouteSchema = `version: 1
+meta: { name: Reel, locales: [en], default_locale: en }
+entities:
+  user: { key: id }
+  film: { key: id, attributes: { title: { type: string } } }
+interactions:
+  watch: { kind: positive, weight: 2, half_life: 60d }
+signals:
+  taste:      { type: embedding, for: film, factors: 2, regularization: 0.1, alpha: 10, iterations: 15, default: 0.6 }
+  popularity: { type: global_count, normalise: rank, default: 0.1 }
+recommendable: film
+`
+
+const notWatched = "constraints:\n  - { id: not_watched, exclude: { interacted: [watch], count_gte: 1 } }\n"
+
+func mainRoute(t *testing.T, schemaText string) []string {
+	t.Helper()
+	srv := newTestServer(t)
+	push(t, srv, schemaText)
+	sendTwoCrowds(t, srv)
+	do(t, srv, "POST", "/v1/models/train", "", bearer)
+	waitForTraining(t, srv)
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	body := fmt.Sprintf(`{"interactions":[{"user":"late","type":"watch","target":"f07","ts":%q},{"user":"late","type":"watch","target":"f09","ts":%q}]}`, now, now)
+	if res, raw := do(t, srv, "POST", "/v1/interactions", body, bearer); res.StatusCode != 200 {
+		t.Fatalf("%d %s", res.StatusCode, raw)
+	}
+	res, raw := do(t, srv, "GET", "/v1/recommend/late?limit=8", "", bearer)
+	if res.StatusCode != 200 {
+		t.Fatalf("GET /v1/recommend/late = %d %s", res.StatusCode, raw)
+	}
+	var rec recommend.Response
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Weights["taste"] != 0.6 || rec.Recommender != "default" {
+		t.Errorf("the default recommender should weigh the learned taste: %+v", rec.Weights)
+	}
+	out := make([]string, len(rec.Items))
+	for i, it := range rec.Items {
+		out[i] = it.ID
+	}
+	return out
+}
+
+// The learned taste takes part in the main route with no extra configuration, and the schema's hard
+// constraints apply to it: a film the viewer already watched is never offered back.
+func TestTheMainRouteServesTheLearnedTasteAndKeepsItsConstraints(t *testing.T) {
+	constrained := mainRoute(t, mainRouteSchema+notWatched)
+	if len(constrained) < 4 {
+		t.Fatalf("expected the unwatched films, got %v", constrained)
+	}
+	for _, id := range constrained {
+		if id == "f07" || id == "f09" {
+			t.Errorf("%s was already watched, which the schema's constraint forbids: %v", id, constrained)
+		}
+	}
+	for _, id := range constrained[:3] {
+		if id < "f06" {
+			t.Errorf("a viewer of two second-group films should be led to that group by the learned taste: %v", constrained)
+			break
+		}
+	}
+
+	// the same schema without the constraint does offer them back, so the check above bites
+	unconstrained := mainRoute(t, mainRouteSchema)
+	if !slices.Contains(unconstrained, "f07") && !slices.Contains(unconstrained, "f09") {
+		t.Errorf("without the constraint the watched films are candidates too: %v", unconstrained)
 	}
 }

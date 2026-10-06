@@ -1,0 +1,124 @@
+name: Release
+
+# Push a tag like v1.2.3 (or v1.2.3-rc.1 for a pre-release) and this publishes:
+#   - binaries for linux/darwin/windows on amd64 and arm64, with SHA256SUMS
+#   - a multi-arch image at <dockerhub-user>/walrus on Docker Hub
+#   - a GitHub Release with generated notes
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  binaries:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build and package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NAME="walrus_${VERSION}_${GOOS}_${GOARCH}"
+          EXT=""; [ "$GOOS" = windows ] && EXT=".exe"
+          mkdir -p "dist/$NAME"
+          go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "dist/$NAME/walrus$EXT" ./cmd/walrus
+          cp LICENSE NOTICE readme.md "dist/$NAME/"
+          cd dist
+          if [ "$GOOS" = windows ]; then zip -qr "$NAME.zip" "$NAME"; else tar -czf "$NAME.tar.gz" "$NAME"; fi
+          rm -r "$NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # Tags: 1.2.3, 1.2, 1 and latest for a stable tag; only 1.2.3-rc.1 for a pre-release.
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/walrus
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+      - name: Version without the leading v
+        id: ver
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      # The Dockerfile builds on the runner's architecture and cross-compiles, so no QEMU.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: walrus
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ steps.ver.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: [binaries, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum walrus_* > SHA256SUMS
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # A tag with a hyphen (v1.2.3-rc.1) is a pre-release.
+          PRE=""; case "$GITHUB_REF_NAME" in *-*) PRE="--prerelease" ;; esac
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --verify-tag --generate-notes --title "$GITHUB_REF_NAME" $PRE
+          fi
