@@ -20,6 +20,7 @@ the ranking, and every result comes with the reasons it was shown.
 
 ## Contents
 
+- [Install](#install)
 - [Schema](#schema)
 - [API](#api)
   - [Entities](#entities)
@@ -28,6 +29,23 @@ the ranking, and every result comes with the reasons it was shown.
   - [Errors](#errors)
 - [License](#license)
 - [Contributing](#contributing)
+
+## Install
+
+Needs Docker with the Compose plugin. One command installs Neo4j, the engine and the admin
+dashboard, generates the admin key and the database password, and waits until they are healthy:
+
+```
+curl -fsSL https://raw.githubusercontent.com/WalrusYours/WalrusCore/main/install.sh | bash
+```
+
+It installs into `/opt/walrus` (as root) or `~/walrus`, prints the admin key once, and serves the
+dashboard on `http://127.0.0.1:3001` (loopback only: put a reverse proxy or an SSH tunnel in
+front). Run it again to upgrade: it keeps your `.env` and pulls the newest images. Settings such as
+`WALRUS_DIR`, `WALRUS_VERSION` and `DOCKERHUB_USERNAME` are listed at the top of `install.sh`.
+
+To do it by hand, copy `docker-compose.yml` and `.env.example` (as `.env`) and run
+`docker compose up -d`.
 
 ## Schema
 
